@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cloudquery/cloudquery/plugins/destination/clickhouse/v6/client/spec/spec",
+  "$ref": "#/$defs/Spec",
+  "$defs": {
+    "Duration": {
+      "type": "string",
+      "pattern": "^[-+]?([0-9]*(\\.[0-9]*)?[a-z]+)+$",
+      "title": "CloudQuery configtype.Duration"
+    },
+    "Engine": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^.*MergeTree$",
+          "description": "Name of the table engine.\nOnly [`*MergeTree` family](https://clickhouse.com/docs/en/engines/table-engines/mergetree-family) is supported at the moment.",
+          "default": "MergeTree"
+        },
+        "parameters": {
+          "oneOf": [
+            {
+              "items": {
+                "oneOf": [
+                  true,
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array",
+              "description": "Engine parameters.\nCurrently, no restrictions are imposed on the parameter types."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Engine allows to specify a custom table engine to be used."
+    },
+    "OrderByStrategy": {
+      "properties": {
+        "tables": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Table glob patterns that apply for this ORDER BY clause.\n\nIf unset, the ORDER BY clause will apply to all tables.\n\nIf a table matches both a pattern in `tables` and `skip_tables`, the table will be skipped.\n\nOrder by strategy table patterns should be disjointed sets: if a table matches two order by strategies,\nan error will be raised at runtime."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skip_tables": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Table glob patterns that should be skipped for this ORDER BY clause.\n\nIf unset, no tables will be skipped.\n\nIf a table matches both a pattern in `tables` and `skip_tables`, the table will be skipped.\n\nOrder by strategy table patterns should be disjointed sets: if a table matches two order by strategies,\nan error will be raised at runtime."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order_by": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "ORDER BY list of expressions to use, e.g. `_cq_sync_group_id, toYYYYMM(_cq_sync_time), _cq_id`,\nthe strings are passed as is after \"ORDER BY\" clause, separated by commas, with no validation or quoting.\n\nAn unset order_by is not valid."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PartitionStrategy": {
+      "properties": {
+        "tables": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Table glob patterns that apply for this partitioning.\n\nIf unset, the partitioning will apply to all tables.\n\nIf a table matches both a pattern in `tables` and `skip_tables`, the table will be skipped.\n\nPartition strategy table patterns should be disjointed sets: if a table matches two partition strategies,\nan error will be raised at runtime."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skip_tables": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Table glob patterns that should be skipped for this partitioning.\n\nIf unset, no tables will be skipped.\n\nIf a table matches both a pattern in `tables` and `skip_tables`, the table will be skipped.\n\nPartition strategy table patterns should be disjointed sets: if a table matches two partition strategies,\nan error will be raised at runtime."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "partition_by": {
+          "type": "string",
+          "description": "Partitioning strategy to use, e.g. `toYYYYMM(_cq_sync_time)`,\nthe string is passed as is after \"PARTITION BY\" clause with no validation or quoting.\n\nAn unset partition_by is not valid."
+        },
+        "skip_incremental_tables": {
+          "type": "boolean",
+          "description": "Skip incremental tables from partitioning."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Spec": {
+      "properties": {
+        "connection_string": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Connection string to connect to the database.\nSee [SDK documentation](https://github.com/ClickHouse/clickhouse-go#dsn) for more details.\n\nExample connection string:\n\n- `\"clickhouse://username:password@host1:9000,host2:9000/database?dial_timeout=200ms\u0026max_execution_time=60\"`"
+        },
+        "cluster": {
+          "type": "string",
+          "description": "Cluster name to be used for [distributed DDL](https://clickhouse.com/docs/en/sql-reference/distributed-ddl).\nIf the value is empty, DDL operations will affect only the server the plugin is connected to."
+        },
+        "engine": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Engine",
+              "description": "Engine to be used for tables.\nOnly [`*MergeTree` family](https://clickhouse.com/docs/en/engines/table-engines/mergetree-family) is supported at the moment."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ca_cert": {
+          "type": "string",
+          "description": "PEM-encoded certificate authorities.\nWhen set, a certificate pool will be created by appending the certificates to the system pool.\n\nSee [file variable substitution](/docs/advanced-topics/environment-variable-substitution#file-variable-substitution-example)\nfor how to read this value from a file."
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of items that may be grouped together to be written in a single write.",
+          "default": 10000
+        },
+        "batch_size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum size of items that may be grouped together to be written in a single write.",
+          "default": 5242880
+        },
+        "batch_timeout": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Duration",
+              "description": "Maximum interval between batch writes.",
+              "default": "20s"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "partition": {
+          "oneOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/PartitionStrategy"
+              },
+              "type": "array",
+              "description": "Enables partitioning of tables via the `PARTITION BY` clause."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order": {
+          "oneOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/OrderByStrategy"
+              },
+              "type": "array",
+              "description": "Enables setting table sort keys via the `ORDER BY` clause."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "connection_string"
+      ],
+      "description": "CloudQuery ClickHouse destination plugin spec."
+    }
+  }
+}

@@ -1,34 +1,27 @@
 run:
   tests: true
-  skip-dirs:
-    - bin
-    - docs
-    - client/mocks
-    - resources/forks
-  timeout: 10m
+  timeout: 15m
   build-tags:
     - all
 
 linters-settings:
   errcheck:
     check-blank: false
-    ignore: fmt:.*,[rR]ead|[wW]rite|[cC]lose,io:Copy
   gocritic:
     disabled-checks:
       - commentFormatting
   dupl:
     # tokens count to trigger issue, 150 by default
     threshold: 500
-  decorder:
-    dec-order:
-      - type
-      - const
-      - var
-      - func
-    disable-dec-order-check: false
-  wrapcheck:
-    ignoreSigs:
-      - diag.WrapError
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
+
+  misspell:
+    ignore-words:
+      - hdinsight
 
   revive:
     enable-all-rules: true
@@ -73,17 +66,27 @@ linters-settings:
         disabled: true
       - name: nested-structs
         disabled: true
+      - name: unchecked-type-assertion
+        disabled: true
+      - name: import-alias-naming
+        disabled: true
+      - name: redundant-import-alias
+        disabled: true
+
+  gofmt:
+    rewrite-rules:
+    - pattern:     'interface{}'
+      replacement: 'any'
+    - pattern:     'a[b:len(a)]'
+      replacement: 'a[b:]'
+
 
 linters:
   enable:
     - asciicheck
     - bodyclose
-    - deadcode
-    - decorder
-    - depguard
     - dupl
     - errcheck
-    - gci
     - gocritic
     - gofmt
     - gosimple
@@ -95,31 +98,31 @@ linters:
     - prealloc
     - revive
     - staticcheck
-    - structcheck
     - unconvert
     - unparam
     - unused
-    - varcheck
-    - wrapcheck
 
 issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
   exclude-rules:
     # Exclude some linters from running on tests files.
     - path: _test\.go
       linters:
         - dupl
         - gocritic
-        - wrapcheck
       # Exclude some linters from running on resource files.
     - path: resources(\\|\/).*\.go
       linters:
         - dupl
-        - decorder
     # Exclude some linters from running on services files.
     - path: services\.go
       linters:
         - dupl
-    # Run wrapcheck only on resources files.
-    - path: '(client|test|tools)(\\|\/).*\.go'
-      linters:
-        - wrapcheck
+  exclude-dirs:
+    - bin
+    - docs
+    - client/mocks
+    - resources/forks
+    - codegen
+

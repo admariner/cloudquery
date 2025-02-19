@@ -1,7 +1,7 @@
 project_name: cli
 
 monorepo:
-  tag_prefix: cli/
+  tag_prefix: cli-
   dir: cli
 
 before:
@@ -17,7 +17,7 @@ builds:
       - GO111MODULE=on
     main: ./main.go
     ldflags:
-      - -s -w -X github.com/cloudquery/cloudquery/cli/pkg/core.Version={{.Version}} -X github.com/cloudquery/cloudquery/cli/cmd.Commit={{.Commit}} -X github.com/cloudquery/cloudquery/cli/cmd.Date={{.Date}} -X github.com/cloudquery/cloudquery/cli/cmd.APIKey=28iMwucm5GXsoevNGSfDl1LC6zV
+      - -s -w -X github.com/cloudquery/cloudquery/cli/v6/cmd.Version={{.Version}}
     goos:
       - windows
       - linux
@@ -28,33 +28,20 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    binary: cloudquery
 archives:
-  -
-    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
-    replacements:
-      darwin: Darwin
-      linux: Linux
-      windows: Windows
-      386: i386
-      amd64: x86_64
+  - name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
     format: binary
-  -
-    id: homebrew
+  - id: homebrew
     name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
-    replacements:
-      darwin: Darwin
-      linux: Linux
-      windows: Windows
-      386: i386
-      amd64: x86_64
     format: zip
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.txt"
 changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
+      - "^docs:"
+      - "^test:"
 release:
-  prerelease: true
+  prerelease: auto
