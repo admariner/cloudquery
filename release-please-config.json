@@ -1,24 +1,98 @@
 {
   "bootstrap-sha": "cf9a8560c47d93422cecb9aa4e414bd4e6484186",
-  "release-type": "go",
   "packages": {
-    "cli": { "component": "cli" },
-    "plugins/source/aws": { "component": "plugins/source/aws" },
-    "plugins/source/azure": { "component": "plugins/source/azure" },
-    "plugins/source/cloudflare": { "component": "plugins/source/cloudflare" },
-    "plugins/source/digitalocean": {
-      "component": "plugins/source/digitalocean"
+    "cli": {
+      "component": "cli"
     },
-    "plugins/source/fuzz": { "component": "plugins/source/fuzz" },
-    "plugins/source/gcp": { "component": "plugins/source/gcp" },
-    "plugins/source/github": { "component": "plugins/source/github" },
-    "plugins/source/k8s": { "component": "plugins/source/k8s" },
-    "plugins/source/okta": { "component": "plugins/source/okta" },
-    "plugins/source/terraform": { "component": "plugins/source/terraform" }
+    "plugins/destination/azblob": {
+      "component": "plugins-destination-azblob"
+    },
+    "plugins/destination/bigquery": {
+      "component": "plugins-destination-bigquery"
+    },
+    "plugins/destination/clickhouse": {
+      "component": "plugins-destination-clickhouse"
+    },
+    "plugins/destination/duckdb": {
+      "component": "plugins-destination-duckdb"
+    },
+    "plugins/destination/elasticsearch": {
+      "component": "plugins-destination-elasticsearch"
+    },
+    "plugins/destination/file": {
+      "component": "plugins-destination-file"
+    },
+    "plugins/destination/firehose": {
+      "component": "plugins-destination-firehose"
+    },
+    "plugins/destination/gcs": {
+      "component": "plugins-destination-gcs"
+    },
+    "plugins/destination/gremlin": {
+      "component": "plugins-destination-gremlin"
+    },
+    "plugins/destination/kafka": {
+      "component": "plugins-destination-kafka"
+    },
+    "plugins/destination/meilisearch": {
+      "component": "plugins-destination-meilisearch"
+    },
+    "plugins/destination/mongodb": {
+      "component": "plugins-destination-mongodb"
+    },
+    "plugins/destination/mssql": {
+      "component": "plugins-destination-mssql"
+    },
+    "plugins/destination/mysql": {
+      "component": "plugins-destination-mysql"
+    },
+    "plugins/destination/neo4j": {
+      "component": "plugins-destination-neo4j"
+    },
+    "plugins/destination/postgresql": {
+      "component": "plugins-destination-postgresql"
+    },
+    "plugins/destination/s3": {
+      "component": "plugins-destination-s3"
+    },
+    "plugins/destination/snowflake": {
+      "component": "plugins-destination-snowflake"
+    },
+    "plugins/destination/sqlite": {
+      "component": "plugins-destination-sqlite"
+    },
+    "plugins/destination/test": {
+      "component": "plugins-destination-test"
+    },
+    "plugins/source/hackernews": {
+      "component": "plugins-source-hackernews"
+    },
+    "plugins/source/square": {
+      "component": "plugins-source-square",
+      "release-type": "python"
+    },
+    "plugins/source/test": {
+      "component": "plugins-source-test"
+    },
+    "plugins/source/xkcd": {
+      "component": "plugins-source-xkcd"
+    },
+    "plugins/transformer/basic": {
+      "component": "plugins-transformer-basic"
+    },
+    "plugins/transformer/jsonflattener": {
+      "component": "plugins-transformer-jsonflattener"
+    },
+    "plugins/transformer/test": {
+      "component": "plugins-transformer-test"
+    },
+    "scaffold": {
+      "component": "scaffold"
+    }
   },
-  "bump-minor-pre-major": true,
-  "bump-patch-for-minor-pre-major": true,
-  "tag-separator": "/",
+  "pull-request-title-pattern": "chore${scope}: Release${component} v${version}",
+  "release-type": "go",
   "separate-pull-requests": true,
-  "pull-request-title-pattern": "chore${scope}: Release${component} v${version}"
+  "sequential-calls": true,
+  "tag-separator": "-"
 }

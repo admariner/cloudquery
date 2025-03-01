@@ -1,0 +1,8 @@
+kind: source
+spec:
+  name: aws
+  path: cloudquery/aws
+  version: v1.0.0
+  registry: local
+  destinations: [postgresql]
+  tables: [test]

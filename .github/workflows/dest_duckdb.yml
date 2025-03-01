@@ -1,0 +1,53 @@
+name: Destination Plugin DuckDB Workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "plugins/destination/duckdb/**"
+      - ".github/workflows/dest_duckdb.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/destination/duckdb/**"
+      - ".github/workflows/dest_duckdb.yml"
+
+jobs:
+  plugins-destination-duckdb:
+    timeout-minutes: 30
+    name: "plugins/destination/duckdb"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./plugins/destination/duckdb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/destination/duckdb/go.mod
+          cache: true
+          cache-dependency-path: plugins/destination/duckdb/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62.2
+          working-directory: plugins/destination/duckdb
+          args: "--config ../../.golangci.yml"
+      - name: gen
+        if: github.event_name == 'pull_request'
+        run: make gen
+      - name: Fail if generation updated files
+        if: github.event_name == 'pull_request'
+        run: test "$(git status -s | wc -l)" -eq 0 || (git status -s; exit 1)
+      - name: Build
+        run: go build .
+      - name: Test
+        run: make test
+  

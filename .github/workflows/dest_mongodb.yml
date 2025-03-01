@@ -1,0 +1,56 @@
+name: Destination Plugin MongoDB Workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "plugins/destination/mongodb/**"
+      - ".github/workflows/dest_mongodb.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/destination/mongodb/**"
+      - ".github/workflows/dest_mongodb.yml"
+
+jobs:
+  plugins-destination-mongodb:
+    timeout-minutes: 30
+    name: "plugins/destination/mongodb"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./plugins/destination/mongodb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/destination/mongodb/go.mod
+          cache: true
+          cache-dependency-path: plugins/destination/mongodb/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62.2
+          working-directory: plugins/destination/mongodb
+          args: "--config ../../.golangci.yml"
+      - name: gen
+        if: github.event_name == 'pull_request'
+        run: make gen
+      - name: Fail if generation updated files
+        if: github.event_name == 'pull_request'
+        run: test "$(git status -s | wc -l)" -eq 0 || (git status -s; exit 1)
+      - name: Build
+        run: go build .
+      - name: Spin up MongoDB
+        run: |
+          docker run -d -p 27017:27017 mongo:3.6
+      - name: Test
+        run: make test
+  

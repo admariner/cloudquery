@@ -1,1 +1,7 @@
-*       @yevgenypats
+* @cloudquery/integrations-backend
+
+**/go.mod
+**/go.sum
+.release-please-manifest.json
+**/CHANGELOG.md
+**/go.mod.tpl

@@ -1,0 +1,523 @@
+name: Publish plugin to hub
+on:
+  push:
+    tags:
+      - "plugins-*-*-v*.*.*"
+      - "!plugins-destination-duckdb-v*.*.*"
+      - "!plugins-destination-sqlite-v*.*.*"
+      - "!plugins-destination-snowflake-v*.*.*"
+
+env:
+  ui_dir_name: cloud-config-ui
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      plugin_name_undashed: ${{ steps.undash_plugin_name.outputs.plugin_name }}
+      plugin_name: ${{ steps.split.outputs.plugin_name }}
+      plugin_kind: ${{ steps.split.outputs.plugin_kind }}
+      plugin_version: ${{ steps.split.outputs.plugin_version }}
+      plugin_dir: ${{ steps.split.outputs.plugin_dir }}
+      prerelease: ${{ steps.semver_parser.outputs.prerelease }}
+      plugin_releaser: ${{ steps.set-result.outputs.result }}
+      ui_build_dir: ${{ steps.split.outputs.ui_build_dir }}
+      ui_dir_arg: ${{ steps.check-ui-directory.outputs.result }}
+    steps:
+      - name: Split tag
+        id: split
+        run: |
+          tag=${{ github.ref_name }}
+          plugin_kind=$(echo $tag | cut -d- -f2)
+          plugin_name=$(echo $tag | cut -d- -f3)
+          plugin_version=$(echo $tag | cut -d- -f4-)
+          # perform looping till either the plugin version passes our semver test or is empty
+          until [[ $plugin_version =~ ^v?[0-9]+\.[0-9]+ ]] || [[ $(echo $plugin_version | wc -c) -eq 0 ]] ; do
+             echo "${plugin_version} is not a valid version"
+             plugin_name="$plugin_name-$(echo $plugin_version | cut -d- -f1)"
+             plugin_version=$(echo $plugin_version | cut -d- -f2-)
+          done
+          echo "plugin_name=${plugin_name}" >> $GITHUB_OUTPUT
+          echo "plugin_kind=${plugin_kind}" >> $GITHUB_OUTPUT
+          echo "plugin_version=${plugin_version}" >> $GITHUB_OUTPUT
+          echo "plugin_dir=plugins/${plugin_kind}/${plugin_name}" >> $GITHUB_OUTPUT
+          echo "ui_build_dir=plugins/${plugin_kind}/${plugin_name}/$ui_dir_name/build" >> $GITHUB_OUTPUT
+      - name: Undash
+        id: undash_plugin_name
+        env:
+          plugin_name: ${{ steps.split.outputs.plugin_name }}
+        run: |
+          p=$(echo $plugin_name | sed 's|-|_|g')
+          echo "plugin_name=${p}" >> $GITHUB_OUTPUT
+
+      # Fail if not a valid SemVer string
+      - name: Parse semver string
+        uses: booxmedialtd/ws-action-parse-semver@7784200024d6b3fc01253e617ec0168daf603de3
+        id: semver_parser
+        with:
+          input_string: ${{steps.split.outputs.plugin_version}}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/github-script@v7
+        id: set-result
+        env:
+          PLUGIN_DIR: ${{steps.split.outputs.plugin_dir}}
+        with:
+          script: |
+            const fs = require('fs').promises;
+            const path = require('path');
+            const pluginFiles = await fs.readdir(process.env.PLUGIN_DIR);
+            if (pluginFiles.includes('package.json')) {
+              return 'node';
+            }
+            if (pluginFiles.includes('main.go')) {
+              return 'go';
+            }
+            if (pluginFiles.includes('main.py')) {
+              return 'python';
+            }
+            if (pluginFiles.includes('settings.gradle')) {
+              return 'java';
+            }
+            return 'unsupported';
+          result-encoding: string
+
+      - uses: actions/github-script@v7
+        id: check-ui-directory
+        env:
+          PLUGIN_DIR: ${{steps.split.outputs.plugin_dir}}
+        with:
+          script: |
+            const fs = require('fs').promises;
+            const path = require('path');
+            const pluginFiles = await fs.readdir(process.env.PLUGIN_DIR);
+            if (pluginFiles.includes(process.env.ui_dir_name)) {
+              return '--ui-dir ' + process.env.ui_dir_name + '/build';
+            }
+            return '';
+          result-encoding: string
+
+  build-config-ui:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.x
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ needs.prepare.outputs.plugin_dir }}/go.mod
+          cache: true
+          cache-dependency-path: ${{ needs.prepare.outputs.plugin_dir }}/go.sum
+
+      - name: Setup CloudQuery
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: cloudquery/setup-cloudquery@v4
+        with:
+          version: v6.15.3
+
+      - name: Build
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        run: go build .
+
+      - name: Use Node.js LTS
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+          cache-dependency-path: "${{needs.prepare.outputs.plugin_dir}}/${{env.ui_dir_name}}/package-lock.json"
+
+      - name: Install dependencies
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        run: npm ci
+        working-directory: "${{needs.prepare.outputs.plugin_dir}}/${{env.ui_dir_name}}"
+
+      - name: Build config UI
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        env:
+          REACT_APP_PLUGIN_TEAM: cloudquery
+          REACT_APP_PLUGIN_KIND: ${{needs.prepare.outputs.plugin_kind}}
+          REACT_APP_PLUGIN_NAME: ${{needs.prepare.outputs.plugin_name}}
+          REACT_APP_PLUGIN_VERSION: ${{needs.prepare.outputs.plugin_version}}
+        working-directory: "${{needs.prepare.outputs.plugin_dir}}/${{env.ui_dir_name}}"
+        run: |
+          npm run build
+
+      - name: Upload build artifacts
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: build_dir
+          path: ${{ needs.prepare.outputs.ui_build_dir }}
+
+  publish-plugin-to-hub-java:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-config-ui
+    if: needs.prepare.outputs.plugin_releaser == 'java'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: build_dir
+          path: ${{ needs.prepare.outputs.ui_build_dir }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "20"
+          cache: "gradle"
+          cache-dependency-path: "${{ needs.prepare.outputs.plugin_dir }}/**/build.gradle"
+
+      # Needed for shell escape
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install shell escape
+        run: |
+          npm install shell-escape@0.2.0
+
+      - name: Get Release Notes
+        id: release-notes
+        uses: actions/github-script@v7
+        env:
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        with:
+          result-encoding: string
+          script: |
+            const shellescape = require('shell-escape');
+            const { PRERELEASE } = process.env;
+            if (PRERELEASE) {
+              return shellescape(["This is a pre-release version of the plugin and should be used for testing purposes only"])
+            }
+            const { data } = await github.rest.repos.getReleaseByTag({
+              owner: "cloudquery",
+              repo: context.repo.repo,
+              tag: context.ref.replace('refs/tags/', ''),
+            });
+            return shellescape([data.body]);
+
+      - name: Find and Replace
+        uses: jacobtomlinson/gha-find-replace@f1069b438f125e5395d84d1c6fd3b559a7880cb5
+        with:
+          find: "(?i)version_${{ needs.prepare.outputs.plugin_kind }}_${{ needs.prepare.outputs.plugin_name_undashed }}"
+          replace: ${{ needs.prepare.outputs.plugin_version }}
+          include: ${{ needs.prepare.outputs.plugin_dir }}/docs/*.md
+
+      - # Required for the package command to work
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build package
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        run: ./gradlew build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+
+      - name: Run package command
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          rm -rf docs/tables.md
+          java -jar app/build/libs/app.jar package -m ${{ steps.release-notes.outputs.result }} ${{ needs.prepare.outputs.plugin_version }} .
+
+      - name: Setup CloudQuery
+        uses: cloudquery/setup-cloudquery@v4
+        with:
+          version: v6.15.3
+
+      - name: Publish plugin to hub
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        env:
+          CLOUDQUERY_API_KEY: ${{ secrets.CLOUDQUERY_API_KEY }}
+        run: |
+          cloudquery plugin publish --finalize ${{ needs.prepare.outputs.ui_dir_arg }}
+
+  publish-plugin-to-hub-python:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-config-ui
+    if: needs.prepare.outputs.plugin_releaser == 'python'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: build_dir
+          path: ${{ needs.prepare.outputs.ui_build_dir }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Needed for shell escape
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install shell escape
+        run: |
+          npm install shell-escape@0.2.0
+
+      - name: Get Release Notes
+        id: release-notes
+        uses: actions/github-script@v7
+        env:
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        with:
+          result-encoding: string
+          script: |
+            const shellescape = require('shell-escape');
+            const { PRERELEASE } = process.env;
+            if (PRERELEASE) {
+              return shellescape(["This is a pre-release version of the plugin and should be used for testing purposes only"])
+            }
+            const { data } = await github.rest.repos.getReleaseByTag({
+              owner: "cloudquery",
+              repo: context.repo.repo,
+              tag: context.ref.replace('refs/tags/', ''),
+            });
+            return shellescape([data.body]);
+
+      - name: Find and Replace
+        uses: jacobtomlinson/gha-find-replace@f1069b438f125e5395d84d1c6fd3b559a7880cb5
+        with:
+          find: "(?i)version_${{ needs.prepare.outputs.plugin_kind }}_${{ needs.prepare.outputs.plugin_name_undashed }}"
+          replace: ${{ needs.prepare.outputs.plugin_version }}
+          include: ${{ needs.prepare.outputs.plugin_dir }}/docs/*.md
+
+      - # Required for the package command to work
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run package command
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        run: |
+          rm -rf docs/tables.md
+          python main.py package -m ${{ steps.release-notes.outputs.result }} ${{ needs.prepare.outputs.plugin_version }} .
+
+      - name: Setup CloudQuery
+        uses: cloudquery/setup-cloudquery@v4
+        with:
+          version: v6.15.3
+
+      - name: Publish plugin to hub
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        env:
+          CLOUDQUERY_API_KEY: ${{ secrets.CLOUDQUERY_API_KEY }}
+        run: |
+          cloudquery plugin publish --finalize ${{ needs.prepare.outputs.ui_dir_arg }}
+
+  publish-plugin-to-hub-node:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-config-ui
+    if: needs.prepare.outputs.plugin_releaser == 'node'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: build_dir
+          path: ${{ needs.prepare.outputs.ui_build_dir }}
+
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+          cache-dependency-path: "${{needs.prepare.outputs.plugin_dir}}/package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{needs.prepare.outputs.plugin_dir}}
+
+      - name: Install shell escape
+        run: |
+          npm install shell-escape@0.2.0
+
+      - name: Get Release Notes
+        id: release-notes
+        uses: actions/github-script@v7
+        env:
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        with:
+          result-encoding: string
+          script: |
+            const shellescape = require('shell-escape');
+            const { PRERELEASE } = process.env;
+            if (PRERELEASE) {
+              return shellescape(["This is a pre-release version of the plugin and should be used for testing purposes only"])
+            }
+            const { data } = await github.rest.repos.getReleaseByTag({
+              owner: "cloudquery",
+              repo: context.repo.repo,
+              tag: context.ref.replace('refs/tags/', ''),
+            });
+            return shellescape([data.body]);
+
+      - name: Find and Replace
+        uses: jacobtomlinson/gha-find-replace@f1069b438f125e5395d84d1c6fd3b559a7880cb5
+        with:
+          find: "(?i)version_${{ needs.prepare.outputs.plugin_kind }}_${{ needs.prepare.outputs.plugin_name_undashed }}"
+          replace: ${{ needs.prepare.outputs.plugin_version }}
+          include: ${{ needs.prepare.outputs.plugin_dir }}/docs/*.md
+
+      - # Required for the package command to work
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run package command
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        run: |
+          rm -rf docs/tables.md
+          npm run dev -- package -m ${{ steps.release-notes.outputs.result }} ${{ needs.prepare.outputs.plugin_version }} .
+
+      - name: Setup CloudQuery
+        uses: cloudquery/setup-cloudquery@v4
+        with:
+          version: v6.15.3
+
+      - name: Publish plugin to hub
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        env:
+          CLOUDQUERY_API_KEY: ${{ secrets.CLOUDQUERY_API_KEY }}
+        run: |
+          cloudquery plugin publish --finalize ${{ needs.prepare.outputs.ui_dir_arg }}
+
+  publish-plugin-to-hub-go:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-config-ui
+    if: needs.prepare.outputs.plugin_releaser == 'go'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        if: needs.prepare.outputs.ui_dir_arg != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: build_dir
+          path: ${{ needs.prepare.outputs.ui_build_dir }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.23.4-publish-plugin-to-hub-cache-${{ hashFiles(format('{0}/{1}', needs.prepare.outputs.plugin_dir, 'go.sum')) }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.23.4-publish-plugin-to-hub-cache-plugins-${{ needs.prepare.outputs.plugin_kind }}-${{ needs.prepare.outputs.plugin_name }}
+
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ needs.prepare.outputs.plugin_dir }}/go.mod
+          cache: false
+
+      # Needed for shell escape
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install shell escape
+        run: |
+          npm install shell-escape@0.2.0
+
+      - name: Get Release Notes
+        id: release-notes
+        uses: actions/github-script@v7
+        env:
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        with:
+          result-encoding: string
+          script: |
+            const shellescape = require('shell-escape');
+            const { PRERELEASE } = process.env;
+            if (PRERELEASE) {
+              return shellescape(["This is a pre-release version of the plugin and should be used for testing purposes only"])
+            }
+            const { data } = await github.rest.repos.getReleaseByTag({
+              owner: "cloudquery",
+              repo: context.repo.repo,
+              tag: context.ref.replace('refs/tags/', ''),
+            });
+            return shellescape([data.body]);
+
+      - name: Find and Replace
+        uses: jacobtomlinson/gha-find-replace@f1069b438f125e5395d84d1c6fd3b559a7880cb5
+        with:
+          find: "(?i)version_${{ needs.prepare.outputs.plugin_kind }}_${{ needs.prepare.outputs.plugin_name_undashed }}"
+          replace: ${{ needs.prepare.outputs.plugin_version }}
+          include: ${{ needs.prepare.outputs.plugin_dir }}/docs/*.md
+
+      - name: Run package command
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        run: |
+          rm -rf docs/tables.md
+          go run main.go package -m ${{ steps.release-notes.outputs.result }} ${{ needs.prepare.outputs.plugin_version }} .
+
+      - name: Setup CloudQuery
+        uses: cloudquery/setup-cloudquery@v4
+        with:
+          version: v6.15.3
+
+      - name: Publish plugin to hub
+        working-directory: ${{ needs.prepare.outputs.plugin_dir }}
+        env:
+          CLOUDQUERY_API_KEY: ${{ secrets.CLOUDQUERY_API_KEY }}
+        run: |
+          cloudquery plugin publish --finalize ${{ needs.prepare.outputs.ui_dir_arg }}
+
+      - name: Push Tag prefixed with plugin directory
+        if: needs.prepare.outputs.prerelease == ''
+        run: |
+          git tag ${{ needs.prepare.outputs.plugin_dir }}/${{ needs.prepare.outputs.plugin_version }} && git push origin ${{ needs.prepare.outputs.plugin_dir }}/${{ needs.prepare.outputs.plugin_version }}

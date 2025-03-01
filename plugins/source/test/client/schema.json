@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cloudquery/cloudquery/plugins/source/test/v4/client/spec",
+  "$ref": "#/$defs/Spec",
+  "$defs": {
+    "Spec": {
+      "properties": {
+        "num_clients": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of clients to create",
+          "default": 1
+        },
+        "num_rows": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of rows to generate in test_some_table.",
+              "default": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "num_sub_rows": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of rows to generate (per row of parent) in test_sub_table.",
+              "default": 10
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "num_sub_cols": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of `extra_column_*` columns to generate per row in test_sub_table. The type of the columns is int64.",
+              "default": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_env": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "string",
+                "pattern": "^[\\w]+\\=[\\w]*$"
+              },
+              "type": "array",
+              "description": "Required environment variables. The plugin will fail if these are not set\nto the correct values. Specified in `key=value` format. Use `key=` to specify\nthat the environment variable should be not set or empty."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fail_immediately": {
+          "type": "boolean",
+          "description": "If true, the plugin will fail immediately at the table resolver level, before any resources are synced",
+          "default": false
+        },
+        "exit_immediately": {
+          "type": "boolean",
+          "description": "If true, the plugin will os.Exit(1) immediately at the table resolver level, before any resources are synced",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    }
+  }
+}

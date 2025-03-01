@@ -1,0 +1,471 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cloudquery/cloudquery/plugins/destination/s3/v7/client/spec/spec",
+  "$ref": "#/$defs/Spec",
+  "$defs": {
+    "CSVSpec": {
+      "properties": {
+        "skip_header": {
+          "type": "boolean",
+          "description": "Specifies if the first line of a file should be the header.",
+          "default": false
+        },
+        "delimiter": {
+          "type": "string",
+          "pattern": "^.$",
+          "description": "Character that will be used as the delimiter.",
+          "default": ","
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "CloudQuery CSV file output spec."
+    },
+    "Duration": {
+      "type": "string",
+      "pattern": "^[-+]?([0-9]*(\\.[0-9]*)?[a-z]+)+$",
+      "title": "CloudQuery configtype.Duration"
+    },
+    "JSONSpec": {
+      "additionalProperties": false,
+      "type": "object",
+      "description": "CloudQuery JSON file output spec."
+    },
+    "ParquetSpec": {
+      "properties": {
+        "version": {
+          "type": "string",
+          "enum": [
+            "v1.0",
+            "v2.4",
+            "v2.6",
+            "v2Latest"
+          ],
+          "description": "Parquet format version",
+          "default": "v2Latest"
+        },
+        "root_repetition": {
+          "type": "string",
+          "enum": [
+            "undefined",
+            "required",
+            "optional",
+            "repeated"
+          ],
+          "description": "Root repetition",
+          "default": "repeated"
+        },
+        "max_row_group_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max row group length",
+          "default": 134217728
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "CloudQuery Parquet file output spec."
+    },
+    "ServerSideEncryptionConfiguration": {
+      "properties": {
+        "sse_kms_key_id": {
+          "type": "string",
+          "description": "ServerSideEncryptionConfiguration KMS Key ID appended to S3 API calls header. Used in conjunction with server_side_encryption."
+        },
+        "server_side_encryption": {
+          "type": "string",
+          "enum": [
+            "AES256",
+            "aws:kms",
+            "aws:kms:dsse"
+          ],
+          "description": "Server Side Encryption header which declares encryption type in S3 API calls header: x-amz-server-side-encryption."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "sse_kms_key_id",
+        "server_side_encryption"
+      ]
+    },
+    "Spec": {
+      "allOf": [
+        {
+          "properties": {
+            "path": {
+              "not": {
+                "anyOf": [
+                  {
+                    "pattern": "^.*\\./.*$"
+                  },
+                  {
+                    "pattern": "^.*//.*$"
+                  }
+                ]
+              },
+              "type": "string"
+            }
+          },
+          "title": "`path` is a clean path value",
+          "errorMessage": {
+            "properties": {
+              "path": "value must not contain ./ or //"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "no_rotate": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "no_rotate"
+            ]
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "not": {
+                  "pattern": "^.*\\{\\{UUID\\}\\}.*$"
+                },
+                "type": "string"
+              }
+            },
+            "title": "Disallow {{UUID}} in path"
+          },
+          "title": "Disallow {{UUID}} in path when using no_rotate",
+          "errorMessage": {
+            "properties": {
+              "path": "the {{UUID}} placeholder must not be present in the path when no_rotate is enabled"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "no_rotate": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "no_rotate"
+            ]
+          },
+          "then": {
+            "properties": {
+              "batch_size": {
+                "type": "null"
+              },
+              "batch_size_bytes": {
+                "type": "null"
+              },
+              "batch_timeout": {
+                "type": "null"
+              }
+            }
+          },
+          "title": "Disallow batching when using no_rotate",
+          "errorMessage": {
+            "properties": {
+              "batch_size": "batching options must not be present when no_rotate is enabled",
+              "batch_size_bytes": "batching options must not be present when no_rotate is enabled",
+              "batch_timeout": "batching options must not be present when no_rotate is enabled",
+              "no_rotate": "batching options must not be present when no_rotate is enabled"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "no_rotate": {
+                "type": "boolean",
+                "const": false
+              }
+            },
+            "title": "Disallow setting no_rotate to true"
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^.*\\{\\{UUID\\}\\}.*$"
+              }
+            },
+            "title": "Require {{UUID}} to be present in path"
+          },
+          "title": "Require {{UUID}} in path when batching",
+          "errorMessage": {
+            "properties": {
+              "path": "the {{UUID}} placeholder must be present in the path"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "write_empty_objects_for_empty_tables": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "write_empty_objects_for_empty_tables"
+            ]
+          },
+          "then": {
+            "properties": {
+              "format": {
+                "type": "string",
+                "const": "parquet",
+                "description": "Output format."
+              }
+            },
+            "required": [
+              "format"
+            ]
+          },
+          "title": "write_empty_objects_for_empty_tables requires parquet format",
+          "errorMessage": {
+            "properties": {
+              "format": "when using `write_empty_objects_for_empty_tables` format must be set to `parquet`"
+            }
+          }
+        }
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "csv"
+            },
+            "format_spec": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/CSVSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "json"
+            },
+            "format_spec": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/JSONSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "parquet"
+            },
+            "format_spec": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ParquetSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "csv",
+            "json",
+            "parquet"
+          ],
+          "description": "Output format."
+        },
+        "format_spec": {
+          "oneOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CSVSpec"
+                },
+                {
+                  "$ref": "#/$defs/JSONSpec"
+                },
+                {
+                  "$ref": "#/$defs/ParquetSpec"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compression": {
+          "type": "string",
+          "enum": [
+            "",
+            "gzip"
+          ],
+          "description": "Compression type.\nEmpty or missing stands for no compression."
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Bucket where to sync the files."
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Region where bucket is located."
+        },
+        "local_profile": {
+          "type": "string",
+          "description": "[Local profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) to use to authenticate this account with.\nShould be set to the name of the profile.\n\nFor example, with the following credentials file:\n\n  ```ini copy\n  [default]\n  aws_access_key_id=xxxx\n  aws_secret_access_key=xxxx\n\n  [user1]\n  aws_access_key_id=xxxx\n  aws_secret_access_key=xxxx\n  ```\n\n`local_profile` should be set to either `default` or `user1`.",
+          "examples": [
+            "my_aws_profile"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^[^/].*$",
+          "description": "Path to where the files will be uploaded in the above bucket, for example `path/to/files/{{TABLE}}/{{UUID}}.parquet`.\n   The path supports the following placeholder variables:\n\n- `{{TABLE}}` will be replaced with the table name\n- `{{TABLE_HYPHEN}}` will be replaced with the table name with hyphens instead of underscores\n- `{{FORMAT}}` will be replaced with the file format, such as `csv`, `json` or `parquet`. If compression is enabled, the format will be `csv.gz`, `json.gz` etc.\n- `{{UUID}}` will be replaced with a random UUID to uniquely identify each file\n- `{{YEAR}}` will be replaced with the current year in `YYYY` format\n- `{{MONTH}}` will be replaced with the current month in `MM` format\n- `{{DAY}}` will be replaced with the current day in `DD` format\n- `{{HOUR}}` will be replaced with the current hour in `HH` format\n- `{{MINUTE}}` will be replaced with the current minute in `mm` format\n\n**Note** that timestamps are in `UTC` and will be the current time at the time the file is written, not when the sync started.",
+          "examples": [
+            "path/to/files/{{TABLE}}/{{UUID}}.parquet"
+          ],
+          "errorMessage": "value should not start with /"
+        },
+        "no_rotate": {
+          "type": "boolean",
+          "description": "If set to `true`, the plugin will write to one file per table.\nOtherwise, for every batch a new file will be created with a different `.\u003cUUID\u003e` suffix.",
+          "default": false
+        },
+        "athena": {
+          "type": "boolean",
+          "description": "When `athena` is set to `true`, the S3 plugin will sanitize keys in JSON columns to be compatible with the Hive Metastore / Athena.\nThis allows tables to be created with a Glue Crawler and then queried via Athena, without changes to the table schema.",
+          "default": false
+        },
+        "test_write": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "description": "Ensure write access to the given bucket and path by writing a test object on each sync.\nIf you are sure that the bucket and path are writable, you can set this to `false` to skip the test.",
+              "default": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content_type": {
+          "type": "string",
+          "description": "This allows you to set the Content Type of objects uploaded to S3. This will override the default the content type set based on the file format\n\"csv\": \"text/csv\"\n\"json\": \"application/json\"\n\"parquet\":\" \"application/vnd.apache.parquet\"",
+          "default": ""
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Endpoint to use for S3 API calls. This is useful for S3-compatible storage services such as MinIO.\n**Note**: if you want to use path-style addressing, i.e., `https://s3.amazonaws.com/BUCKET/KEY`, `use_path_style` should be enabled, too.",
+          "default": ""
+        },
+        "server_side_encryption_configuration": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ServerSideEncryptionConfiguration",
+              "description": "Server-side encryption settings."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "use_path_style": {
+          "type": "boolean",
+          "description": "Allows to use path-style addressing in the `endpoint` option, i.e., `https://s3.amazonaws.com/BUCKET/KEY`.\nBy default, the S3 client will use virtual hosted bucket addressing when possible (`https://BUCKET.s3.amazonaws.com/KEY`).",
+          "default": false
+        },
+        "endpoint_skip_tls_verify": {
+          "type": "boolean",
+          "description": "Disable TLS verification for requests to your S3 endpoint.\n\nThis option is intended to be used when using a custom endpoint using the `endpoint` option.",
+          "default": false
+        },
+        "acl": {
+          "type": "string",
+          "default": ""
+        },
+        "write_empty_objects_for_empty_tables": {
+          "type": "boolean",
+          "description": "If set to `true`, the plugin will create empty parquet files with the table headers and data types for those tables that have no data.",
+          "default": false
+        },
+        "batch_size": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum number of items that may be grouped together to be written in a single write.\n\nDefaults to `10000` unless `no_rotate` is `true` (will be `0` then).",
+              "default": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_size_bytes": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum size of items that may be grouped together to be written in a single write.\n\nDefaults to `52428800` (50 MiB) unless `no_rotate` is `true` (will be `0` then).",
+              "default": 52428800
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_timeout": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Duration",
+              "description": "Maximum interval between batch writes.\n\nDefaults to `30s` unless `no_rotate` is `true` (will be `0s` then).",
+              "default": "30s"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "format",
+        "bucket",
+        "region",
+        "path"
+      ]
+    }
+  }
+}
