@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cloudquery/cloudquery/plugins/destination/gcs/v5/client/spec/spec",
+  "$ref": "#/$defs/Spec",
+  "$defs": {
+    "CSVSpec": {
+      "properties": {
+        "skip_header": {
+          "type": "boolean",
+          "description": "Specifies if the first line of a file should be the header.",
+          "default": false
+        },
+        "delimiter": {
+          "type": "string",
+          "pattern": "^.$",
+          "description": "Character that will be used as the delimiter.",
+          "default": ","
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "CloudQuery CSV file output spec."
+    },
+    "Duration": {
+      "type": "string",
+      "pattern": "^[-+]?([0-9]*(\\.[0-9]*)?[a-z]+)+$",
+      "title": "CloudQuery configtype.Duration"
+    },
+    "JSONSpec": {
+      "additionalProperties": false,
+      "type": "object",
+      "description": "CloudQuery JSON file output spec."
+    },
+    "ParquetSpec": {
+      "properties": {
+        "version": {
+          "type": "string",
+          "enum": [
+            "v1.0",
+            "v2.4",
+            "v2.6",
+            "v2Latest"
+          ],
+          "description": "Parquet format version",
+          "default": "v2Latest"
+        },
+        "root_repetition": {
+          "type": "string",
+          "enum": [
+            "undefined",
+            "required",
+            "optional",
+            "repeated"
+          ],
+          "description": "Root repetition",
+          "default": "repeated"
+        },
+        "max_row_group_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max row group length",
+          "default": 134217728
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "CloudQuery Parquet file output spec."
+    },
+    "Spec": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "no_rotate": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "no_rotate"
+            ]
+          },
+          "then": {
+            "properties": {
+              "batch_size": {
+                "type": "null"
+              },
+              "batch_size_bytes": {
+                "type": "null"
+              },
+              "batch_timeout": {
+                "type": "null"
+              }
+            }
+          },
+          "title": "Disallow batching when using no_rotate",
+          "errorMessage": {
+            "properties": {
+              "batch_size": "batching options must not be present when no_rotate is enabled",
+              "batch_size_bytes": "batching options must not be present when no_rotate is enabled",
+              "batch_timeout": "batching options must not be present when no_rotate is enabled",
+              "no_rotate": "batching options must not be present when no_rotate is enabled"
+            }
+          }
+        },
+        {
+          "properties": {
+            "path": {
+              "not": {
+                "anyOf": [
+                  {
+                    "pattern": "^.*\\./.*$"
+                  },
+                  {
+                    "pattern": "^.*//.*$"
+                  }
+                ]
+              },
+              "type": "string"
+            }
+          },
+          "title": "`path` is a clean path value",
+          "errorMessage": {
+            "properties": {
+              "path": "value must not contain ./ or //"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "no_rotate": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "no_rotate"
+            ]
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "not": {
+                  "pattern": "^.*\\{\\{UUID\\}\\}.*$"
+                },
+                "type": "string"
+              }
+            },
+            "title": "Disallow {{UUID}} in path"
+          },
+          "title": "Disallow {{UUID}} in path when using no_rotate",
+          "errorMessage": {
+            "properties": {
+              "path": "the {{UUID}} placeholder must not be present in the path when no_rotate is enabled"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "no_rotate": {
+                "type": "boolean",
+                "const": false
+              }
+            },
+            "title": "Disallow setting no_rotate to true"
+          },
+          "then": {
+            "anyOf": [
+              {
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^.*\\{\\{UUID\\}\\}.*$"
+                  }
+                },
+                "title": "Require {{UUID}} to be present in path"
+              },
+              {
+                "properties": {
+                  "path": {
+                    "not": {
+                      "type": "string",
+                      "pattern": "^.*\\{\\{.*\\}\\}.*$"
+                    }
+                  }
+                },
+                "title": "`path` does not contain path variables"
+              }
+            ]
+          },
+          "title": "Require {{UUID}} in path when batching",
+          "errorMessage": {
+            "properties": {
+              "path": "value must contain the {{UUID}} placeholder or no path variables at all"
+            }
+          }
+        }
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "csv"
+            },
+            "format_spec": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/CSVSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "json"
+            },
+            "format_spec": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/JSONSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "parquet"
+            },
+            "format_spec": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ParquetSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "csv",
+            "json",
+            "parquet"
+          ],
+          "description": "Output format."
+        },
+        "format_spec": {
+          "oneOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CSVSpec"
+                },
+                {
+                  "$ref": "#/$defs/JSONSpec"
+                },
+                {
+                  "$ref": "#/$defs/ParquetSpec"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compression": {
+          "type": "string",
+          "enum": [
+            "",
+            "gzip"
+          ],
+          "description": "Compression type.\nEmpty or missing stands for no compression."
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Bucket where to sync the files."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to where the files will be uploaded in the above bucket, for example `path/to/files/{{TABLE}}/{{UUID}}.parquet`\n\nThe path supports the following placeholder variables:\n- `{{TABLE}}` will be replaced with the table name\n- `{{FORMAT}}` will be replaced with the file format, such as `csv`, `json` or `parquet`. If compression is enabled, the format will be `csv.gz`, `json.gz` etc.\n- `{{UUID}}` will be replaced with a random UUID to uniquely identify each file\n- `{{YEAR}}` will be replaced with the current year in `YYYY` format\n- `{{MONTH}}` will be replaced with the current month in `MM` format\n- `{{DAY}}` will be replaced with the current day in `DD` format\n- `{{HOUR}}` will be replaced with the current hour in `HH` format\n- `{{MINUTE}}` will be replaced with the current minute in `mm` format\n\n **Note** that timestamps are in `UTC` and will be the current time at the time the file is written, not when the sync started.",
+          "examples": [
+            "path/to/files/{{TABLE}}/{{UUID}}.parquet"
+          ],
+          "errorMessage": "value should not start with /"
+        },
+        "no_rotate": {
+          "type": "boolean",
+          "description": "If set to `true`, the plugin will write to one file per table.\nOtherwise, for every batch a new file will be created with a different `.\u003cUUID\u003e` suffix.",
+          "default": false
+        },
+        "batch_size": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum number of items may be grouped together to be written in a single object.\n\nDefaults to `10000` unless `no_rotate` is `true` (will be `0` then).",
+              "default": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_size_bytes": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum size of items that may be grouped together to be written in a single object.\n\nDefaults to `52428800` (50 MiB) unless `no_rotate` is `true` (will be `0` then).",
+              "default": 52428800
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_timeout": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Duration",
+              "description": "Maximum interval between batch writes.\n\nDefaults to `30s` unless `no_rotate` is `true` (will be `0s` then).",
+              "default": "30s"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service_account_key_json": {
+          "type": "string",
+          "description": "GCP service account key content.\nThis allows for using different service accounts for the GCP source and GCS destination.\nIf using service account keys, it is best to use [environment or file variable substitution](/docs/advanced-topics/environment-variable-substitution)."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "format",
+        "bucket",
+        "path"
+      ]
+    }
+  }
+}

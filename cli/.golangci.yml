@@ -1,28 +1,22 @@
 run:
   tests: true
   timeout: 5m
-  skip-dirs:
-    - bin
-    - docs
-    - cqproto/internal
 
 linters-settings:
   errcheck:
     check-blank: false
-    ignore: fmt:.*,[rR]ead|[wW]rite|[cC]lose,io:Copy
   gocritic:
     disabled-checks:
       - commentFormatting
   dupl:
     # tokens count to trigger issue, 150 by default
     threshold: 500
-  decorder:
-    dec-order:
-      - type
-      - const
-      - var
-      - func
-    disable-dec-order-check: false
+
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
 
   revive:
     enable-all-rules: true
@@ -56,7 +50,7 @@ linters-settings:
       - name: exported
         disabled: false
         arguments:
-          - 'disableStutteringCheck'
+          - "disableStutteringCheck"
       - name: unused-parameter
         disabled: true
       - name: confusing-naming
@@ -65,17 +59,26 @@ linters-settings:
         disabled: true
       - name: nested-structs
         disabled: true
+      - name: unchecked-type-assertion
+        disabled: true
+      - name: import-alias-naming
+        disabled: true
+      - name: redundant-import-alias
+        disabled: true
+
+  gofmt:
+    rewrite-rules:
+      - pattern: "interface{}"
+        replacement: "any"
+      - pattern: "a[b:len(a)]"
+        replacement: "a[b:]"
 
 linters:
   enable:
     - asciicheck
     - bodyclose
-    - deadcode
-    - decorder
-    - depguard
     - dupl
     - errcheck
-    - gci
     - gocritic
     - gofmt
     - gosimple
@@ -87,9 +90,14 @@ linters:
     - prealloc
     - revive
     - staticcheck
-    - structcheck
     - unconvert
     - unparam
     - unused
-    - varcheck
 
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-dirs:
+    - bin
+    - docs
+    - internal/pb

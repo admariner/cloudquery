@@ -1,0 +1,20 @@
+name: Manual Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  gen:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    if: ${{ github.event.issue.pull_request }}
+    steps:
+      - name: Trigger Source Plugin Generation Command
+        uses: peter-evans/slash-command-dispatch@v4
+        with:
+          token: ${{ secrets.GH_CQ_BOT }}
+          reaction-token: ${{ secrets.GITHUB_TOKEN }}
+          issue-type: pull-request
+          commands: gen
+          permission: write

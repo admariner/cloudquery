@@ -1,0 +1,47 @@
+name: Destination Plugin Test Workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "plugins/destination/test/**"
+      - ".github/workflows/dest_test.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/destination/test/**"
+      - ".github/workflows/dest_test.yml"
+
+jobs:
+  plugins-destination-test:
+    timeout-minutes: 30
+    name: "plugins/destination/test"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./plugins/destination/test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/destination/test/go.mod
+          cache: true
+          cache-dependency-path: plugins/destination/test/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62.2
+          working-directory: plugins/destination/test
+          args: "--config ../../.golangci.yml"
+      - name: Build
+        run: go build .
+      - name: Test
+        run: make test
+  

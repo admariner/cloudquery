@@ -1,0 +1,70 @@
+area/ci:
+  - .github/workflows/**/*
+area/cli:
+  - cli/**/*
+area/plugin/destination/azblob:
+  - plugins/destination/azblob/**/*
+area/plugin/destination/bigquery:
+  - plugins/destination/bigquery/**/*
+area/plugin/destination/clickhouse:
+  - plugins/destination/clickhouse/**/*
+area/plugin/destination/duckdb:
+  - plugins/destination/duckdb/**/*
+area/plugin/destination/elasticsearch:
+  - plugins/destination/elasticsearch/**/*
+area/plugin/destination/file:
+  - plugins/destination/file/**/*
+area/plugin/destination/firehose:
+  - plugins/destination/firehose/**/*
+area/plugin/destination/gcs:
+  - plugins/destination/gcs/**/*
+area/plugin/destination/gremlin:
+  - plugins/destination/gremlin/**/*
+area/plugin/destination/kafka:
+  - plugins/destination/kafka/**/*
+area/plugin/destination/meilisearch:
+  - plugins/destination/meilisearch/**/*
+area/plugin/destination/mongodb:
+  - plugins/destination/mongodb/**/*
+area/plugin/destination/mssql:
+  - plugins/destination/mssql/**/*
+area/plugin/destination/mysql:
+  - plugins/destination/mysql/**/*
+area/plugin/destination/neo4j:
+  - plugins/destination/neo4j/**/*
+area/plugin/destination/postgresql:
+  - plugins/destination/postgresql/**/*
+area/plugin/destination/s3:
+  - plugins/destination/s3/**/*
+area/plugin/destination/snowflake:
+  - plugins/destination/snowflake/**/*
+area/plugin/destination/sqlite:
+  - plugins/destination/sqlite/**/*
+area/plugin/destination/sqlite-python:
+  - plugins/destination/sqlite/**/*
+area/plugin/destination/test:
+  - plugins/destination/test/**/*
+area/plugin/source/airtable:
+  - plugins/source/airtable/**/*
+area/plugin/source/bitbucket:
+  - plugins/source/bitbucket/**/*
+area/plugin/source/hackernews:
+  - plugins/source/hackernews/**/*
+area/plugin/source/square:
+  - plugins/source/square/**/*
+area/plugin/source/test:
+  - plugins/source/test/**/*
+area/plugin/source/typeform:
+  - plugins/source/typeform/**/*
+area/plugin/source/xkcd:
+  - plugins/source/xkcd/**/*
+area/plugin/transform/basic:
+  - plugins/transform/basic/**/*
+area/plugin/transform/jsonflattener:
+  - plugins/transform/jsonflattener/**/*
+area/plugin/transform/test:
+  - plugins/transform/test/**/*
+area/scaffold:
+  - scaffold/**/*
+area/website:
+  - website/**/*

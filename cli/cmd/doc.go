@@ -18,7 +18,7 @@ func newCmdDoc() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "doc [directory_path]",
 		Short:  docShort,
-		Args:   cobra.ExactValidArgs(1),
+		Args:   cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return doc.GenMarkdownTreeCustom(cmd.Parent(), args[0], filePrepender, linkHandler)
@@ -27,18 +27,24 @@ func newCmdDoc() *cobra.Command {
 	return cmd
 }
 
-func linkHandler(s string) string { return s }
+func linkHandler(s string) string {
+	if strings.HasSuffix(s, ".md") {
+		fileName := strings.TrimSuffix(s, ".md")
+		fullPath := "/docs/reference/cli/" + fileName
+
+		return fullPath
+	}
+
+	return s
+}
 
 func filePrepender(filename string) string {
 	const fmTemplate = `---
-id: "%s"
-hide_title: true
-sidebar_label: "%s"
+title: "%s"
 ---
 `
 	name := filepath.Base(filename)
 	base := strings.TrimSuffix(name, path.Ext(name))
 	id := strings.TrimPrefix(base, "cloudquery_")
-	sidebarLabel := strings.ReplaceAll(id, "_", " ")
-	return fmt.Sprintf(fmTemplate, id, sidebarLabel)
+	return fmt.Sprintf(fmTemplate, id)
 }

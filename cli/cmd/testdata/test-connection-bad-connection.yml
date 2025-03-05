@@ -1,0 +1,19 @@
+kind: source
+spec:
+  name: cloudflare
+  path: cloudquery/cloudflare
+  registry: cloudquery
+  version: "v9.9.9" # latest version of source cloudflare plugin
+  destinations: ["postgresql"]
+  tables: ["*"]
+  spec:
+    api_token: "bad-auth-token"
+---
+kind: destination
+spec:
+  name: "postgresql"
+  path: "cloudquery/postgresql"
+  registry: cloudquery
+  version: "v8.7.10" # latest version of destination postgresql plugin
+  spec:
+    connection_string: "postgresql://postgres:not-a-real-password@localhost:1234/postgres?sslmode=disable"
