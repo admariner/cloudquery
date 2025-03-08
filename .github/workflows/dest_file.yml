@@ -1,0 +1,55 @@
+name: Destination Plugin File Workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "plugins/destination/filetypes/**"
+      - "plugins/destination/file/**"
+      - ".github/workflows/dest_file.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/destination/filetypes/**"
+      - "plugins/destination/file/**"
+      - ".github/workflows/dest_file.yml"
+
+jobs:
+  plugins-destination-file:
+    timeout-minutes: 30
+    name: "plugins/destination/file"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./plugins/destination/file
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/destination/file/go.mod
+          cache: true
+          cache-dependency-path: plugins/destination/file/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6.1.1
+        with:
+          version: v1.64.6
+          working-directory: plugins/destination/file
+          args: "--config ../../.golangci.yml"
+      - name: gen
+        if: github.event_name == 'pull_request'
+        run: make gen
+      - name: Fail if generation updated files
+        if: github.event_name == 'pull_request'
+        run: test "$(git status -s | wc -l)" -eq 0 || (git status -s; exit 1)
+      - name: Build
+        run: go build .
+      - name: Test file plugin
+        run: make test
+  

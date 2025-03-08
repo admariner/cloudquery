@@ -1,0 +1,58 @@
+name: Destination Plugin Gremlin Workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "plugins/destination/gremlin/**"
+      - ".github/workflows/dest_gremlin.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/destination/gremlin/**"
+      - ".github/workflows/dest_gremlin.yml"
+
+jobs:
+  plugins-destination-gremlin:
+    timeout-minutes: 30
+    name: "plugins/destination/gremlin"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./plugins/destination/gremlin
+    services:
+      gremlin-server:
+        image: tinkerpop/gremlin-server:3.7.1
+        ports:
+          - 8182:8182
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/destination/gremlin/go.mod
+          cache: true
+          cache-dependency-path: plugins/destination/gremlin/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.6
+          working-directory: plugins/destination/gremlin
+          args: "--config ../../.golangci.yml"
+      - name: gen
+        if: github.event_name == 'pull_request'
+        run: make gen
+      - name: Fail if generation updated files
+        if: github.event_name == 'pull_request'
+        run: test "$(git status -s | wc -l)" -eq 0 || (git status -s; exit 1)
+      - name: Build
+        run: go build .
+      - name: Test Gremlin
+        run: make test
+  

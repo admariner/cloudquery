@@ -1,232 +1,338 @@
 package analytics
 
 import (
-	"strings"
+	"context"
+	"os"
 	"time"
 
-	"github.com/cloudquery/cloudquery/cli/internal/logging"
-	"github.com/cloudquery/cloudquery/cli/internal/persistentdata"
-	"github.com/cloudquery/cloudquery/cli/pkg/plugin/registry"
-	"github.com/cloudquery/cq-provider-sdk/provider/diag"
+	cqapi "github.com/cloudquery/cloudquery-api-go"
+	cqauth "github.com/cloudquery/cloudquery-api-go/auth"
+	internalAuth "github.com/cloudquery/cloudquery/cli/v6/internal/auth"
+	"github.com/cloudquery/cloudquery/cli/v6/internal/env"
+	"github.com/cloudquery/cloudquery/cli/v6/internal/specs/v0"
 	"github.com/google/uuid"
-	"github.com/modern-go/reflect2"
-	"github.com/rs/zerolog/log"
-	"github.com/rudderlabs/analytics-go"
-	"github.com/spf13/afero"
-	"github.com/spf13/cast"
+	rudderstack "github.com/rudderlabs/analytics-go/v4"
 )
 
-type VersionInfo struct {
-	Version   string `json:"version,omitempty"`
-	BuildDate string `json:"build_date,omitempty"`
-	CommitId  string `json:"commit_id,omitempty"`
-}
-
-type Message interface {
-	Properties() map[string]interface{}
-}
-
-type Client struct {
-	version    VersionInfo
-	env        *Environment
-	terminal   bool
-	userId     string
-	cookieId   uuid.UUID
-	instanceId string
-
-	disabled bool
-	debug    bool
-	inspect  bool
-
-	properties map[string]interface{}
-
-	client analytics.Client
-	apikey string
-}
-
-type Option func(c *Client)
-
-const (
-	CQTeamID = "12345678-0000-0000-0000-c1a0dbeef000"
+var (
+	client                 rudderstack.Client
+	cachedSyncEventDetails *eventDetails
 )
 
-// Consumers must call analytics.Init before using this package
-var currentHub *Client
-
-func WithProperties(properties map[string]interface{}) Option {
-	return func(c *Client) {
-		for k, v := range properties {
-			c.properties[k] = v
-		}
-	}
+type eventDetails struct {
+	user                  cqapi.User
+	currentTeam           string
+	isCurrentTeamInternal bool
+	environment           string
 }
 
-func WithApiKey(apikey string) Option {
-	return func(c *Client) {
-		c.apikey = apikey
-	}
-}
+type noOpLogger struct{}
 
-func WithInstanceId(instanceId string) Option {
-	return func(c *Client) {
-		c.instanceId = instanceId
-	}
-}
+func (noOpLogger) Logf(format string, args ...any)   {}
+func (noOpLogger) Errorf(format string, args ...any) {}
 
-func WithDisabled() Option {
-	return func(c *Client) {
-		c.disabled = true
+func InitClient() {
+	writeKey := env.GetEnvOrDefault("CQ_RUDDERSTACK_WRITE_KEY", "2h38sP5iH58EYKBTRsGByJDDr6r")
+	dataPlaneURL := env.GetEnvOrDefault("CQ_RUDDERSTACK_DATA_PLANE_URL", "https://analytics-events.cloudquery.io")
+	config := rudderstack.Config{
+		DataPlaneUrl: dataPlaneURL,
+		Logger:       noOpLogger{},
 	}
-}
-
-func WithDebug() Option {
-	return func(c *Client) {
-		c.debug = true
-	}
-}
-
-func WithInspect() Option {
-	return func(c *Client) {
-		c.inspect = true
-	}
-}
-
-func WithVersionInfo(version, commit, buildDate string) Option {
-	return func(c *Client) {
-		c.version.Version = version
-		c.version.CommitId = commit
-		c.version.BuildDate = buildDate
-	}
-}
-
-func WithTerminal(terminal bool) Option {
-	return func(c *Client) {
-		c.terminal = terminal
-	}
-}
-
-// Init initializes the Analytics Client with options. The returned error is non-nil if
-// options is invalid, for instance if a malformed DSN is provided.
-func Init(opts ...Option) error {
-	currentHub = New(opts...)
-	return nil
-}
-
-func New(opts ...Option) *Client {
-	c := &Client{
-		version:    VersionInfo{},
-		userId:     GetCookieId().String(),
-		cookieId:   GetCookieId(),
-		instanceId: uuid.New().String(),
-		properties: make(map[string]interface{}),
-		debug:      false,
-		inspect:    false,
-	}
-
-	for _, o := range opts {
-		o(c)
-	}
-	if c.env == nil {
-		c.env = getEnvironmentAttributes(c.terminal)
-	}
-	cfg := analytics.Config{}
-	if c.debug {
-		cfg.Verbose = true
-		cfg.Logger = logging.NewSimple(&log.Logger, "analytics")
-	}
-
-	ac, err := analytics.NewWithConfig(c.apikey, "https://cloudquerypgm.dataplane.rudderstack.com", cfg)
+	var err error
+	client, err = rudderstack.NewWithConfig(writeKey, config)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to initialize analytics client, client is disabled")
-		c.disabled = true
+		client = nil
 	}
-	c.client = ac
-	return c
 }
 
-// GetCookieId will read or generate a persistent `telemetry-random-id` file and return its value.
-// First it will try reading ~/.cq/telemetry-random-id and use that value if found. If not, it will move on to ./cq/telemetry-random-id, first attempting a read and if not found, will create that file filling it with a newly generated ID.
-// If a directory with the same name is encountered, process is aborted and an empty string is returned.
-// If a new file is generated, c.newRandomId is set.
-func GetCookieId() uuid.UUID {
-	fs := afero.Afero{Fs: afero.NewOsFs()}
-	v, err := persistentdata.New(fs, "telemetry-random-id", uuid.NewString).Get()
-	if err != nil {
-		return uuid.New()
+func getEnvironment() string {
+	_, ok := os.LookupEnv("CQ_CLOUD")
+	if ok {
+		return "cloud"
 	}
-	id, err := uuid.Parse(strings.TrimSpace(v.Content))
-	if err != nil {
-		return uuid.New()
-	}
-	return id
+	return "cli"
 }
 
-func Capture(eventType string, providers registry.Providers, data Message, diags diag.Diagnostics, extra ...interface{}) {
-	c := currentHub
-	if c.disabled || c.apikey == "" {
-		return
+// getSyncEventDetails returns the cached event details if available, otherwise it fetches the details from the API
+func getSyncEventDetails(ctx context.Context) *eventDetails {
+	if cachedSyncEventDetails == nil {
+		refreshSyncEventDetails(ctx)
 	}
-	pp := make([]string, len(providers))
-	for i, p := range providers {
-		pp[i] = p.String()
+	return cachedSyncEventDetails
+}
+
+func refreshSyncEventDetails(ctx context.Context) *eventDetails {
+	tc := cqauth.NewTokenClient()
+	token, err := tc.GetToken()
+	if err != nil {
+		return nil
+	}
+	user, _ := internalAuth.GetUser(ctx, token)
+	if user == nil {
+		return nil
+	}
+	currentTeam, _ := internalAuth.GetTeamForToken(ctx, token)
+
+	currentTeamInternal, _ := internalAuth.IsTeamInternal(ctx, currentTeam)
+
+	eventDetails := &eventDetails{
+		user:                  *user,
+		currentTeam:           currentTeam,
+		isCurrentTeamInternal: currentTeamInternal,
+		environment:           getEnvironment(),
 	}
 
-	eventProps := map[string]interface{}{
-		"version":             c.version.Version,
-		"commit_id":           c.version.CommitId,
-		"build_date":          c.version.BuildDate,
-		"env":                 c.env,
-		"instance_id":         c.instanceId,
-		"cookie_id":           c.cookieId,
-		"success":             !diags.HasErrors(),
-		"installed_providers": pp,
-		"diagnostics":         SummarizeDiagnostics(diags),
-	}
+	// Cache event details for future use
+	cachedSyncEventDetails = eventDetails
 
-	if !reflect2.IsNil(data) {
-		for k, v := range data.Properties() {
-			eventProps[k] = v
-		}
-	}
+	return eventDetails
+}
 
-	for i := 0; i < len(extra); i += 2 {
-		eventProps[cast.ToString(extra[i])] = extra[i+1]
-	}
-
-	// add any global properties
-	for k, v := range c.properties {
-		eventProps[k] = v
-	}
-	if c.inspect {
-		log.Info().Interface("data", eventProps).Str("event", eventType).Msg("inspect analytics event")
-		// if inspect is turned on we only return inspect messages
+func TrackLoginSuccess(ctx context.Context, invocationUUID uuid.UUID) {
+	if client == nil {
 		return
 	}
 
-	event := analytics.Track{UserId: c.userId, Event: eventType, Timestamp: time.Now().UTC(), Properties: eventProps}
-	if err := c.client.Enqueue(event); err != nil {
-		if c.debug {
-			log.Error().Err(err).Msg("failed to send analytics")
-		}
+	details := refreshSyncEventDetails(ctx)
+	if details == nil {
+		return
 	}
-}
-func SetUserId(userId string) {
-	c := currentHub
-	c.userId = userId
+
+	if details.isCurrentTeamInternal {
+		return
+	}
+
+	_ = client.Enqueue(rudderstack.Track{
+		UserId: details.user.ID.String(),
+		Event:  "login_success",
+		Properties: rudderstack.Properties{
+			"invocation_uuid": invocationUUID,
+			"team":            details.currentTeam,
+			"environment":     details.environment,
+			"$groups": rudderstack.Properties{
+				"team": details.currentTeam,
+			},
+		},
+	})
 }
 
-func SetGlobalProperty(k string, v interface{}) {
-	c := currentHub
-	c.properties[k] = v
+type SyncStartedEvent struct {
+	Source       specs.Source
+	Destinations []specs.Destination
+	ShardNum     int
+	ShardTotal   int
 }
 
-func Enabled() bool {
-	return !currentHub.disabled
+func getSyncCommonProps(invocationUUID uuid.UUID, event SyncStartedEvent, details *eventDetails) rudderstack.Properties {
+	destinationPaths := make([]string, len(event.Destinations))
+	for i, d := range event.Destinations {
+		destinationPaths[i] = d.Path
+	}
+
+	userID, userEmail := getUserIDEmail(details.user, details.currentTeam)
+
+	props := rudderstack.NewProperties().
+		// we are using the same invocation_uuid for sync_run_id
+		// invocation_uuid to be consistent with the rest of the events
+		// sync_run_id to match with cloud events
+		Set("invocation_uuid", invocationUUID).
+		Set("sync_run_id", invocationUUID).
+		Set("team", details.currentTeam).
+		Set("$groups", rudderstack.NewProperties().
+			Set("team", details.currentTeam)).
+		Set("environment", details.environment).
+		Set("sync_name", event.Source.Name).
+		Set("source_path", event.Source.Path).
+		Set("destination_paths", destinationPaths).
+		Set("user_id", userID).
+		Set("user_email", userEmail)
+
+	if event.ShardNum > 0 && event.ShardTotal > 0 {
+		props = props.Set("shard_num", event.ShardNum).
+			Set("shard_total", event.ShardTotal)
+	}
+
+	return props
+}
+
+func TrackSyncStarted(ctx context.Context, invocationUUID uuid.UUID, event SyncStartedEvent) {
+	if client == nil {
+		return
+	}
+
+	details := getSyncEventDetails(ctx)
+	if details == nil {
+		return
+	}
+
+	if details.isCurrentTeamInternal {
+		return
+	}
+
+	_ = client.Enqueue(rudderstack.Track{
+		UserId:     details.user.ID.String(),
+		Event:      "sync_run_started",
+		Properties: getSyncCommonProps(invocationUUID, event, details),
+	})
+}
+
+type SyncFinishedEvent struct {
+	SyncStartedEvent
+	Errors            uint64
+	Warnings          uint64
+	Duration          time.Duration
+	ResourceCount     int64
+	AbortedDueToError error
+}
+
+func TrackSyncCompleted(ctx context.Context, invocationUUID uuid.UUID, event SyncFinishedEvent) {
+	if client == nil {
+		return
+	}
+
+	details := getSyncEventDetails(ctx)
+	if details == nil {
+		return
+	}
+
+	if details.isCurrentTeamInternal {
+		return
+	}
+
+	status := "success"
+	if event.AbortedDueToError != nil {
+		status = "error"
+	}
+
+	props := getSyncCommonProps(invocationUUID, event.SyncStartedEvent, details).
+		Set("duration", event.Duration).
+		Set("status", status).
+		Set("total_rows", event.ResourceCount).
+		Set("errors", event.Errors).
+		Set("warnings", event.Warnings).
+		Set("aborted_due_to_error", event.AbortedDueToError)
+
+	_ = client.Enqueue(rudderstack.Track{
+		UserId:     details.user.ID.String(),
+		Event:      "sync_run_completed",
+		Properties: props,
+	})
+}
+
+type InitEvent struct {
+	Source         string
+	Destination    string
+	AcceptDefaults bool
+	SpecPath       string
+	Error          error
+}
+
+func teamServiceAccountUser(teamName string) string {
+	return teamName + "_service_account"
+}
+
+func teamServiceAccountEmail(teamName string) string {
+	return teamName + "@service-account.cloudquery.io"
+}
+
+func getUserIDEmail(user cqapi.User, teamName string) (userID, email string) {
+	if getEnvironment() == "cloud" {
+		return teamServiceAccountUser(teamName), teamServiceAccountEmail(teamName)
+	}
+
+	return user.ID.String(), user.Email
+}
+
+func getInitCommonProps(invocationUUID uuid.UUID, event InitEvent, details *eventDetails) rudderstack.Properties {
+	props := rudderstack.NewProperties().
+		Set("invocation_uuid", invocationUUID).
+		Set("source", event.Source).
+		Set("destination", event.Destination).
+		Set("accept_defaults", event.AcceptDefaults).
+		Set("spec_path", event.SpecPath)
+
+	if event.Error != nil {
+		props.Set("error", event.Error.Error())
+	}
+
+	if details != nil {
+		userID, userEmail := getUserIDEmail(details.user, details.currentTeam)
+
+		props.Set("team", details.currentTeam).
+			Set("$groups", rudderstack.NewProperties().
+				Set("team", details.currentTeam)).
+			Set("environment", details.environment).
+			Set("user_id", userID).
+			Set("user_email", userEmail)
+	}
+
+	return props
+}
+
+func TrackInitStarted(ctx context.Context, invocationUUID uuid.UUID, event InitEvent) {
+	if client == nil {
+		return
+	}
+
+	details := getSyncEventDetails(ctx)
+	if details != nil && details.isCurrentTeamInternal {
+		return
+	}
+
+	props := getInitCommonProps(invocationUUID, event, details)
+	if details != nil {
+		_ = client.Enqueue(rudderstack.Track{
+			UserId:     details.user.ID.String(),
+			Event:      "init_started",
+			Properties: props,
+		})
+		return
+	}
+
+	_ = client.Enqueue(rudderstack.Track{
+		AnonymousId: invocationUUID.String(),
+		Event:       "init_started",
+		Properties:  props,
+	})
+}
+
+func TrackInitCompleted(ctx context.Context, invocationUUID uuid.UUID, event InitEvent) {
+	if client == nil {
+		return
+	}
+
+	details := getSyncEventDetails(ctx)
+	if details != nil && details.isCurrentTeamInternal {
+		return
+	}
+
+	status := "success"
+	if event.Error != nil {
+		status = "error"
+	}
+
+	props := getInitCommonProps(invocationUUID, event, details).
+		Set("status", status)
+
+	if details != nil {
+		_ = client.Enqueue(rudderstack.Track{
+			UserId:     details.user.ID.String(),
+			Event:      "init_completed",
+			Properties: props,
+		})
+		return
+	}
+
+	_ = client.Enqueue(rudderstack.Track{
+		AnonymousId: invocationUUID.String(),
+		Event:       "init_completed",
+		Properties:  props,
+	})
 }
 
 func Close() {
-	if currentHub.client == nil {
+	if client == nil {
 		return
 	}
-	_ = currentHub.client.Close()
+	client.Close()
 }

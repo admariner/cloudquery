@@ -1,0 +1,51 @@
+name: Manual Commands Triggers
+
+on:
+  repository_dispatch:
+    types: [gen-command]
+
+jobs:
+  ok-to-run:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.manually_approved.outputs.result }}
+    steps:
+      - name: Check if was manually approved
+        id: manually_approved
+        run: |
+          manually_approved=${{ github.event_name == 'repository_dispatch' && github.event.client_payload.slash_command.args.named.sha != '' && contains(github.event.client_payload.pull_request.head.sha, github.event.client_payload.slash_command.args.named.sha) }}
+          echo "result=${manually_approved}" >> $GITHUB_OUTPUT
+  gen:
+    timeout-minutes: 30
+    needs: [ok-to-run]
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'gen-command' && needs.ok-to-run.outputs.status == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.slash_command.args.named.sha }}
+          repository: ${{ github.event.client_payload.pull_request.head.repo.full_name }}
+          token: ${{ secrets.GH_CQ_BOT }}
+
+      - name: Setup CloudQuery
+        uses: cloudquery/setup-cloudquery@v4
+        with:
+          version: v6.15.4
+
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ github.event.client_payload.slash_command.args.named.dir }}/go.mod
+          cache: true
+          cache-dependency-path: ${{ github.event.client_payload.slash_command.args.named.dir }}/go.sum
+
+      - name: Generate code
+        run: make gen
+        working-directory: ${{ github.event.client_payload.slash_command.args.named.dir }}
+
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: Update code and docs"
+          branch: ${{ github.event.client_payload.pull_request.head.ref }}

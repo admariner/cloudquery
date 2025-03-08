@@ -1,0 +1,67 @@
+name: Destination Plugin Elasticsearch Workflow
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "plugins/destination/elasticsearch/**"
+      - ".github/workflows/dest_elasticsearch.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/destination/elasticsearch/**"
+      - ".github/workflows/dest_elasticsearch.yml"
+
+jobs:
+  plugins-destination-elasticsearch:
+    timeout-minutes: 10
+    name: "plugins/destination/elasticsearch"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./plugins/destination/elasticsearch
+    services:
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -s -f http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: -Xms512m -Xmx512m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/destination/elasticsearch/go.mod
+          cache: true
+          cache-dependency-path: plugins/destination/elasticsearch/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.6
+          working-directory: plugins/destination/elasticsearch
+          args: "--config ../../.golangci.yml"
+      - name: gen
+        if: github.event_name == 'pull_request'
+        run: make gen
+      - name: Fail if generation updated files
+        if: github.event_name == 'pull_request'
+        run: test "$(git status -s | wc -l)" -eq 0 || (git status -s; exit 1)
+      - name: Build
+        run: go build .
+      - name: Test
+        run: make test
+  
