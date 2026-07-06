@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	cqconfig "github.com/cloudquery/cloudquery-api-go/config"
 	specs "github.com/cloudquery/cloudquery/cli/v6/internal/specs/v0"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -180,6 +181,35 @@ func TestPropagatePluginCredential(t *testing.T) {
 	})
 }
 
+func TestTeamMismatchWarning(t *testing.T) {
+	setConfigTeam := func(t *testing.T, team string) {
+		t.Helper()
+		require.NoError(t, cqconfig.SetConfigHome(t.TempDir()))
+		t.Cleanup(func() { _ = cqconfig.UnsetConfigHome() })
+		if team != "" {
+			require.NoError(t, cqconfig.SetValue("team", team))
+		}
+	}
+	t.Run("configured team differs from tm claim -> warns with both teams", func(t *testing.T) {
+		setConfigTeam(t, "team-a")
+		msg := teamMismatchWarning("acme")
+		require.Contains(t, msg, `"acme"`)
+		require.Contains(t, msg, `"team-a"`)
+	})
+	t.Run("configured team matches -> no warning", func(t *testing.T) {
+		setConfigTeam(t, "acme")
+		require.Empty(t, teamMismatchWarning("acme"))
+	})
+	t.Run("no configured team -> no warning", func(t *testing.T) {
+		setConfigTeam(t, "")
+		require.Empty(t, teamMismatchWarning("acme"))
+	})
+	t.Run("no tm claim -> no warning", func(t *testing.T) {
+		setConfigTeam(t, "team-a")
+		require.Empty(t, teamMismatchWarning(""))
+	})
+}
+
 func TestDownloadAuth_CQPDViaAPIKeyEnv(t *testing.T) {
 	tok := cqpdTokenWithClaims(t, map[string]any{"tm": "acme", "u": "https://x"})
 	t.Setenv("CLOUDQUERY_API_KEY", tok)
@@ -291,6 +321,59 @@ func TestDetectTenantForInit_MintOK_PinsUnavailable_NoError(t *testing.T) {
 	require.NotNil(t, ti)
 	require.Equal(t, "https://acme.us.platform.cloudquery.io", ti.APIURL)
 	require.Nil(t, ti.PinnedSourceVersions, "pins unavailable → nil, init falls back to hub latest")
+}
+
+func TestDetectTenantForInit_DirectToken_Unauthorized_Errors(t *testing.T) {
+	// An expired/rejected env CQ_PLATFORM_TOKEN must fail init early rather than
+	// silently scaffold a spec that 401s at sync time.
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer es.Close()
+	t.Setenv(EnvPlatformToken, cqpdTokenWithClaims(t, map[string]any{"u": es.URL}))
+
+	ti, err := DetectTenantForInit(context.Background(), zerolog.Nop(), "", "")
+	require.Error(t, err, "a rejected env token fails init early")
+	require.ErrorContains(t, err, "expired")
+	require.Nil(t, ti)
+}
+
+func TestDetectTenantForInit_DirectToken_ServerError_BestEffort(t *testing.T) {
+	// A non-auth failure (500) stays best-effort — init proceeds without pins.
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer es.Close()
+	t.Setenv(EnvPlatformToken, cqpdTokenWithClaims(t, map[string]any{"u": es.URL}))
+
+	ti, err := DetectTenantForInit(context.Background(), zerolog.Nop(), "", "")
+	require.NoError(t, err, "a non-auth failure doesn't fail init")
+	require.NotNil(t, ti)
+	require.Nil(t, ti.PinnedSourceVersions)
+}
+
+func TestDetectTenantForInit_MintOK_PinsUnauthorized_BestEffort(t *testing.T) {
+	// The session was just minted, so a 401 from the pins lookup is a server
+	// anomaly, not user-fixable — init still proceeds (unlike the direct-token
+	// path, which the user can fix by refreshing/unsetting the env token).
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer es.Close()
+	srv := fakeCloud(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{
+			{"tenant_id": "11111111-1111-1111-1111-111111111111", "status": "active", "team_name": "team-x", "host": "acme.us.platform.cloudquery.io", "subdomain": "acme"},
+		}})
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		writeSession(w, "cqpd_minted.sig", es.URL)
+	})
+	t.Setenv(envAPIURL, srv.URL)
+
+	ti, err := DetectTenantForInit(context.Background(), zerolog.Nop(), "tok", "team-x")
+	require.NoError(t, err, "a fresh-minted session's 401 doesn't fail init")
+	require.NotNil(t, ti)
+	require.Nil(t, ti.PinnedSourceVersions)
 }
 
 // DetectTenantForInit must make the SAME multi-tenant decision auto-injection
@@ -711,9 +794,9 @@ func TestPinnedSourceVersions_DirectToken(t *testing.T) {
 	tok = cqpdTokenWithClaims(t, map[string]any{"u": es.URL})
 	t.Setenv(EnvPlatformToken, tok)
 
-	got, ok := PinnedSourceVersions(context.Background(), zerolog.Nop(), "", "")
-	require.True(t, ok, "a direct cqpd_ token resolves pinned versions without cloud")
-	require.Equal(t, pinned, got)
+	got, err := PinnedSourceVersions(context.Background(), zerolog.Nop(), "", "")
+	require.NoError(t, err)
+	require.Equal(t, pinned, got, "a direct cqpd_ token resolves pinned versions without cloud")
 }
 
 func TestPinnedSourceVersions_LoginMintsAndFetches(t *testing.T) {
@@ -725,14 +808,28 @@ func TestPinnedSourceVersions_LoginMintsAndFetches(t *testing.T) {
 	})
 	t.Setenv(envAPIURL, srv.URL)
 
-	got, ok := PinnedSourceVersions(context.Background(), zerolog.Nop(), "tok", "team-x")
-	require.True(t, ok, "logged-in flow mints a session then fetches pinned versions")
-	require.Equal(t, pinned, got)
+	got, err := PinnedSourceVersions(context.Background(), zerolog.Nop(), "tok", "team-x")
+	require.NoError(t, err)
+	require.Equal(t, pinned, got, "logged-in flow mints a session then fetches pinned versions")
 }
 
-func TestPinnedSourceVersions_NoTenant_NotOK(t *testing.T) {
-	got, ok := PinnedSourceVersions(context.Background(), zerolog.Nop(), "", "")
-	require.False(t, ok, "no token and no cloud creds → nothing to resolve")
+func TestPinnedSourceVersions_NoTenant_Nil(t *testing.T) {
+	got, err := PinnedSourceVersions(context.Background(), zerolog.Nop(), "", "")
+	require.NoError(t, err, "no token and no cloud creds → nothing to resolve, no error")
+	require.Nil(t, got)
+}
+
+func TestPinnedSourceVersions_DirectToken_Unauthorized(t *testing.T) {
+	// A rejected direct env token propagates errPlatformUnauthorized so the gate
+	// (validate-config) fails instead of silently passing.
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer es.Close()
+	t.Setenv(EnvPlatformToken, cqpdTokenWithClaims(t, map[string]any{"u": es.URL}))
+
+	got, err := PinnedSourceVersions(context.Background(), zerolog.Nop(), "", "")
+	require.ErrorIs(t, err, errPlatformUnauthorized)
 	require.Nil(t, got)
 }
 
@@ -809,6 +906,23 @@ func TestGateSources_VersionsUnavailable_FailOpen(t *testing.T) {
 		{Metadata: specs.Metadata{Name: "aws", Path: "cloudquery/aws", Version: "v99.0.0"}, Destinations: []string{"platform"}},
 	}
 	require.NoError(t, GateSources(context.Background(), zerolog.Nop(), "", "", sources))
+}
+
+func TestGateSources_RejectedToken_Errors(t *testing.T) {
+	// A rejected direct env token would 401 the sync too, so the gate must fail
+	// (not pass clean) — validate-config's "catch what sync would hit" contract.
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer es.Close()
+	t.Setenv(EnvPlatformToken, cqpdTokenWithClaims(t, map[string]any{"u": es.URL}))
+
+	sources := []*specs.Source{
+		{Metadata: specs.Metadata{Name: "aws", Path: "cloudquery/aws", Version: "v1.0.0"}, Destinations: []string{"platform"}},
+	}
+	err := GateSources(context.Background(), zerolog.Nop(), "", "", sources)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "expired")
 }
 
 func TestInject_PlatformPinnedVersion(t *testing.T) {

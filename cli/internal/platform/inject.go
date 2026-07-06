@@ -14,11 +14,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"github.com/Masterminds/semver"
 	cloudquery_api "github.com/cloudquery/cloudquery-api-go"
 	cqapiauth "github.com/cloudquery/cloudquery-api-go/auth"
+	cqconfig "github.com/cloudquery/cloudquery-api-go/config"
 	"github.com/cloudquery/cloudquery/cli/v6/internal/api"
 	cqauth "github.com/cloudquery/cloudquery/cli/v6/internal/auth"
 	"github.com/cloudquery/cloudquery/cli/v6/internal/env"
@@ -124,9 +126,17 @@ func DetectTenantForInit(ctx context.Context, logger zerolog.Logger, cloudToken,
 		if u == "" {
 			return &TenantInit{}, nil // tenant present, but no url to reach endpoints
 		}
+		// This same call validates the token: an explicit env token that the tenant
+		// rejects (expired/revoked/wrong tenant) means the platform sync can't run,
+		// so fail now rather than scaffold a spec that 401s at sync time. Other
+		// failures stay best-effort (nil pins → hub latest).
+		pins, err := fetchSupportedSourceVersions(ctx, logger, t, u)
+		if errors.Is(err, errPlatformUnauthorized) {
+			return nil, unauthorizedTokenError()
+		}
 		return &TenantInit{
 			APIURL:               u,
-			PinnedSourceVersions: fetchSupportedSourceVersions(ctx, logger, t, u),
+			PinnedSourceVersions: pins,
 			token:                t,
 			endpointBase:         u,
 		}, nil
@@ -142,9 +152,12 @@ func DetectTenantForInit(ctx context.Context, logger zerolog.Logger, cloudToken,
 	if err != nil {
 		return nil, fmt.Errorf("mint platform destination session for tenant %s: %w", tenant.TenantId.String(), err)
 	}
+	// The session was just minted, so a 401 here would be a server anomaly, not
+	// user-fixable — keep pins best-effort rather than failing init.
+	pins, _ := fetchSupportedSourceVersions(ctx, logger, session.Token, session.ApiUrl)
 	return &TenantInit{
 		APIURL:               "https://" + tenant.Host,
-		PinnedSourceVersions: fetchSupportedSourceVersions(ctx, logger, session.Token, session.ApiUrl),
+		PinnedSourceVersions: pins,
 		token:                session.Token,
 		endpointBase:         session.ApiUrl,
 	}, nil
@@ -230,12 +243,31 @@ func apiURLFromToken(token string) string {
 // helper so download, injection, and tenant detection treat both envs alike.
 func platformToken() string {
 	if t := os.Getenv(EnvPlatformToken); t != "" {
+		warnTeamMismatchOnce(t)
 		return t
 	}
-	if k := os.Getenv("CLOUDQUERY_API_KEY"); strings.HasPrefix(k, cqpdPrefix) {
+	if k := os.Getenv(cqapiauth.EnvVarCloudQueryAPIKey); strings.HasPrefix(k, cqpdPrefix) {
+		warnTeamMismatchOnce(k)
 		return k
 	}
 	return ""
+}
+
+// warnTeamMismatchOnce surfaces the team mismatch at the platformToken()
+// chokepoint so every consumer (init, validate-config, sync, migrate) warns
+// without each entry point remembering to — and only once per run, since
+// several of them read the token during a single command.
+var teamMismatchOnce gosync.Once
+
+func warnTeamMismatchOnce(token string) {
+	teamMismatchOnce.Do(func() {
+		// stderr only — a parallel zlog.Warn() would double-print when console
+		// logging is enabled (both land on the terminal). Matches login/logout,
+		// which print the credential warnings once via cmd.Printf.
+		if msg := teamMismatchWarning(TeamFromToken(token)); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+	})
 }
 
 // PropagatePluginCredential makes a headless cqpd_ token available to spawned
@@ -310,34 +342,36 @@ func externalSyncsURL(apiURL, path string) string {
 	return base + path
 }
 
-// resolvePlatformSession returns a cqpd_ token and the tenant's API base URL for
-// reaching the /external-syncs/* endpoints (which require an already-minted
-// token). Headless: a direct CQ_PLATFORM_TOKEN / cqpd_ CLOUDQUERY_API_KEY, using
-// its `u` claim. Logged in: mint a session for the team's resolved tenant. Returns
-// ok=false when there's no platform tenant or resolution fails, so callers fall
-// back to their normal behavior.
-func resolvePlatformSession(ctx context.Context, logger zerolog.Logger, cloudToken, teamName string) (cqpdToken, apiURL string, ok bool) {
+// resolvePlatformSession returns a cqpd_ token + tenant API base URL for reaching
+// the /external-syncs/* endpoints, and whether it's a direct env token
+// (CQ_PLATFORM_TOKEN / cqpd_ CLOUDQUERY_API_KEY, using its `u` claim) vs a
+// freshly-minted session for the logged-in team's tenant. ok=false when there's no
+// platform tenant or resolution fails, so callers fall back. `direct` matters for
+// auth failures: a rejected env token is user-fixable and is the same token a sync
+// reuses, whereas a rejected fresh-minted token is a transient server anomaly (a
+// sync mints its own).
+func resolvePlatformSession(ctx context.Context, logger zerolog.Logger, cloudToken, teamName string) (cqpdToken, apiURL string, direct, ok bool) {
 	if os.Getenv(envDisable) == "1" {
-		return "", "", false
+		return "", "", false, false
 	}
 	if t := platformToken(); t != "" {
 		u := apiURLFromToken(t)
 		if u == "" {
 			logger.Debug().Msg("platform: direct token carries no api_url; cannot reach external-syncs endpoints")
-			return "", "", false
+			return "", "", false, false
 		}
-		return t, u, true
+		return t, u, true, true
 	}
 	cl, tenant, ok := resolveCloudTenant(ctx, logger, cloudToken, teamName)
 	if !ok {
-		return "", "", false
+		return "", "", false, false
 	}
 	session, _, err := mintSession(ctx, cl, tenant)
 	if err != nil {
 		logger.Debug().Err(err).Msg("platform: session mint failed; cannot fetch pinned versions")
-		return "", "", false
+		return "", "", false, false
 	}
-	return session.Token, session.ApiUrl, true
+	return session.Token, session.ApiUrl, false, true
 }
 
 // PinnedSourceVersions returns the platform-pinned source plugin versions
@@ -345,21 +379,43 @@ func resolvePlatformSession(ctx context.Context, logger zerolog.Logger, cloudTok
 // GET /external-syncs/supported-source-versions. `init` scaffolds these so the
 // generated spec matches what the tenant accepts, and `validate-config` gates
 // against them — the same window CreateExternalSync enforces at sync time.
-// Best-effort: (nil, false) when there's no platform tenant or the lookup fails.
-func PinnedSourceVersions(ctx context.Context, logger zerolog.Logger, cloudToken, teamName string) (map[string]string, bool) {
-	token, apiURL, ok := resolvePlatformSession(ctx, logger, cloudToken, teamName)
+//
+// Returns errPlatformUnauthorized only when a direct env token is rejected — the
+// same user-fixable failure `init` fails on, and one a sync would hit too, so the
+// gate shouldn't pass clean. Any other failure (no tenant, minted-session 401,
+// network) yields (nil, nil): best-effort, so the gate stays fail-open.
+func PinnedSourceVersions(ctx context.Context, logger zerolog.Logger, cloudToken, teamName string) (map[string]string, error) {
+	token, apiURL, direct, ok := resolvePlatformSession(ctx, logger, cloudToken, teamName)
 	if !ok {
-		return nil, false
+		return nil, nil
 	}
-	versions := fetchSupportedSourceVersions(ctx, logger, token, apiURL)
-	return versions, versions != nil
+	versions, err := fetchSupportedSourceVersions(ctx, logger, token, apiURL)
+	if errors.Is(err, errPlatformUnauthorized) && direct {
+		return nil, errPlatformUnauthorized
+	}
+	return versions, nil
+}
+
+// errPlatformUnauthorized means the platform rejected the token (401/403) —
+// expired, revoked, secret-rotated, or scoped to a dead tenant. Distinguished
+// from other failures so an explicit CQ_PLATFORM_TOKEN can fail init early rather
+// than silently degrade; every other failure stays best-effort (nil, nil).
+var errPlatformUnauthorized = errors.New("platform rejected the token")
+
+// unauthorizedTokenError is the user-facing error for a rejected direct env
+// token, shared by init (DetectTenantForInit) and validate-config (GateSources)
+// so both report the same actionable fix.
+func unauthorizedTokenError() error {
+	return fmt.Errorf("the platform token in your environment (%s, or a %s %s) was rejected — it is likely expired; mint a fresh token or unset it", EnvPlatformToken, cqpdPrefix, cqapiauth.EnvVarCloudQueryAPIKey)
 }
 
 // fetchSupportedSourceVersions GETs /external-syncs/supported-source-versions
-// with an already-minted cqpd_ token and returns the pinned path->version map, or
-// nil on any failure (best-effort). Shared by PinnedSourceVersions and the init
-// tenant-detection path, which resolve the token/apiURL differently.
-func fetchSupportedSourceVersions(ctx context.Context, logger zerolog.Logger, cqpdToken, apiURL string) map[string]string {
+// with an already-minted cqpd_ token and returns the pinned path->version map.
+// Returns errPlatformUnauthorized on a 401/403; (nil, nil) on any other failure
+// (best-effort). Shared by PinnedSourceVersions and the init tenant-detection
+// path, which resolve the token/apiURL differently and treat the auth error
+// differently.
+func fetchSupportedSourceVersions(ctx context.Context, logger zerolog.Logger, cqpdToken, apiURL string) (map[string]string, error) {
 	url := externalSyncsURL(apiURL, "/external-syncs/supported-source-versions")
 
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -367,25 +423,29 @@ func fetchSupportedSourceVersions(ctx context.Context, logger zerolog.Logger, cq
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		logger.Debug().Err(err).Str("url", url).Msg("platform: failed to build supported-source-versions request")
-		return nil
+		return nil, nil
 	}
 	req.Header.Set("Authorization", "Bearer "+cqpdToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		logger.Debug().Err(err).Str("url", url).Msg("platform: supported-source-versions lookup failed")
-		return nil
+		return nil, nil
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		logger.Debug().Int("status", resp.StatusCode).Str("url", url).Msg("platform: supported-source-versions rejected the token")
+		return nil, errPlatformUnauthorized
+	}
 	if resp.StatusCode != http.StatusOK {
 		logger.Debug().Int("status", resp.StatusCode).Str("url", url).Msg("platform: supported-source-versions returned non-200")
-		return nil
+		return nil, nil
 	}
 	var versions map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
 		logger.Debug().Err(err).Msg("platform: failed to decode supported-source-versions")
-		return nil
+		return nil, nil
 	}
-	return versions
+	return versions, nil
 }
 
 // AnySourceTargetsPlatform reports whether any source opts into the platform
@@ -432,8 +492,13 @@ func GateSources(ctx context.Context, logger zerolog.Logger, cloudToken, teamNam
 	if len(targeted) == 0 {
 		return nil
 	}
-	pinned, ok := PinnedSourceVersions(ctx, logger, cloudToken, teamName)
-	if !ok || len(pinned) == 0 {
+	pinned, err := PinnedSourceVersions(ctx, logger, cloudToken, teamName)
+	if errors.Is(err, errPlatformUnauthorized) {
+		// A rejected env token would 401 the sync too, so don't pass clean — this
+		// is exactly what validate-config promises to catch.
+		return unauthorizedTokenError()
+	}
+	if len(pinned) == 0 {
 		logger.Debug().Msg("platform: pinned source versions unavailable; skipping version gate")
 		return nil
 	}
@@ -476,6 +541,23 @@ func DownloadAuth(ctx context.Context, logger zerolog.Logger, sources []*specs.S
 		return "", "", fmt.Errorf("failed to get team name from token: %w", err)
 	}
 	return authToken.Value, teamName, nil
+}
+
+// teamMismatchWarning reports when a headless platform token routes plugin
+// downloads and usage to a different team than the one the user is switched
+// to (`cloudquery switch`) — the token's tm claim wins silently otherwise.
+// Returns "" when there is nothing to warn about: no tm claim, no configured
+// team, or the two match.
+func teamMismatchWarning(tokenTeam string) string {
+	if tokenTeam == "" {
+		return ""
+	}
+	configTeam, err := cqconfig.GetValue("team")
+	if err != nil || configTeam == "" || configTeam == tokenTeam {
+		return ""
+	}
+	return fmt.Sprintf("Warning: the platform token in the environment (%s or a %s %s) belongs to team %q; plugin downloads and usage will be attributed to that team, not your currently selected team %q",
+		EnvPlatformToken, cqpdPrefix, cqapiauth.EnvVarCloudQueryAPIKey, tokenTeam, configTeam)
 }
 
 // TeamFromToken returns the cloud team (`tm` claim) embedded in a cqpd_ token,
