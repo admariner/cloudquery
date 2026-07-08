@@ -10,6 +10,7 @@ The following tools / packages are used in this plugin:
 | github.com/apache/arrow-go/v18 | Apache-2.0 |
 | github.com/apache/arrow/go/v13 | Apache-2.0 |
 | github.com/apapsch/go-jsonmerge/v2 | MIT |
+| github.com/avast/retry-go/v5 | MIT |
 | github.com/aws/aws-sdk-go-v2 | Apache-2.0 |
 | github.com/aws/aws-sdk-go-v2/config | Apache-2.0 |
 | github.com/aws/aws-sdk-go-v2/credentials | Apache-2.0 |
@@ -59,10 +60,10 @@ The following tools / packages are used in this plugin:
 | github.com/klauspost/compress/s2 | BSD-3-Clause |
 | github.com/klauspost/compress/snappy | BSD-3-Clause |
 | github.com/klauspost/compress/zstd/internal/xxhash | MIT |
-| github.com/mailru/easyjson | MIT |
 | github.com/mattn/go-colorable | MIT |
 | github.com/mattn/go-isatty | MIT |
 | github.com/oapi-codegen/runtime | Apache-2.0 |
+| github.com/pb33f/ordered-map/v2 | Apache-2.0 |
 | github.com/pierrec/lz4/v4 | BSD-3-Clause |
 | github.com/pmezard/go-difflib/difflib | BSD-3-Clause |
 | github.com/rs/zerolog | MIT |
@@ -73,7 +74,6 @@ The following tools / packages are used in this plugin:
 | github.com/stoewer/go-strcase | MIT |
 | github.com/stretchr/testify | MIT |
 | github.com/thoas/go-funk | MIT |
-| github.com/wk8/go-ordered-map/v2 | Apache-2.0 |
 | github.com/xdg-go/scram | Apache-2.0 |
 | github.com/xdg-go/stringprep | Apache-2.0 |
 | github.com/youmark/pkcs8 | MIT |
@@ -92,6 +92,7 @@ The following tools / packages are used in this plugin:
 | go.opentelemetry.io/otel/sdk/metric | Apache-2.0 |
 | go.opentelemetry.io/otel/trace | Apache-2.0 |
 | go.opentelemetry.io/proto/otlp | Apache-2.0 |
+| go.yaml.in/yaml/v4 | MIT |
 | golang.org/x/crypto | BSD-3-Clause |
 | golang.org/x/exp | BSD-3-Clause |
 | golang.org/x/net | BSD-3-Clause |
