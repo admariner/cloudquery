@@ -93,7 +93,7 @@ type sourceVersion struct {
 // TenantInit carries what `init` needs about the CloudQuery Platform tenant a
 // sync would auto-inject into, resolved in a single tenant lookup + mint: the URL
 // to report, the pinned source versions to scaffold, and a session for further
-// /external-syncs/* lookups (RecommendedTables). A nil *TenantInit from
+// /external-syncs/* lookups (RecommendedSourceConfig). A nil *TenantInit from
 // DetectTenantForInit means no platform-init scenario applies and init should use
 // its normal source + destination flow.
 type TenantInit struct {
@@ -122,7 +122,7 @@ func DetectTenantForInit(ctx context.Context, logger zerolog.Logger, cloudToken,
 		return nil, nil
 	}
 	// A directly supplied cqpd_ token already identifies the tenant and carries its
-	// URL; pins + recommended tables are fetched with that same token.
+	// URL; pins + the recommended source config are fetched with that same token.
 	if t := platformToken(); t != "" {
 		u := apiURLFromToken(t)
 		if u == "" {
@@ -165,44 +165,49 @@ func DetectTenantForInit(ctx context.Context, logger zerolog.Logger, cloudToken,
 	}, nil
 }
 
-// RecommendedTables returns the tables the platform recommends syncing for the
-// given source plugin path, from GET /external-syncs/recommended-tables, reusing
-// the session resolved by DetectTenantForInit (no extra mint). Best-effort: nil
-// when there's no session or the lookup fails / returns nothing, so init falls
-// back to `tables: ['*']`.
-func (ti *TenantInit) RecommendedTables(ctx context.Context, logger zerolog.Logger, sourcePath string) []string {
-	if ti == nil || ti.token == "" || ti.endpointBase == "" || sourcePath == "" {
-		return nil
+// RecommendedSourceConfig returns the ready-to-write source spec the platform
+// recommends for the given source plugin path, from
+// GET /external-syncs/recommended-source-config: the plugin's example config at
+// the platform-pinned version, sanitized server-side (placeholder auth-scope
+// values removed, wired to the injected `platform` destination, recommended
+// tables baked in). Reuses the session resolved by DetectTenantForInit (no
+// extra mint). A platform scaffold is required for platform init — any failure,
+// including the platform returning an empty config, is an error.
+func (ti *TenantInit) RecommendedSourceConfig(ctx context.Context, sourcePath string) (string, error) {
+	if ti == nil || ti.token == "" || ti.endpointBase == "" {
+		return "", errors.New("no platform session to fetch the recommended source config with")
 	}
-	base := externalSyncsURL(ti.endpointBase, "/external-syncs/recommended-tables")
+	if sourcePath == "" {
+		return "", errors.New("source path is required")
+	}
+	base := externalSyncsURL(ti.endpointBase, "/external-syncs/recommended-source-config")
 	url := base + "?path=" + neturl.QueryEscape(sourcePath)
 
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		logger.Debug().Err(err).Str("url", url).Msg("platform: failed to build recommended-tables request")
-		return nil
+		return "", fmt.Errorf("build recommended source config request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+ti.token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Debug().Err(err).Str("url", url).Msg("platform: recommended-tables lookup failed")
-		return nil
+		return "", fmt.Errorf("recommended source config lookup: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		logger.Debug().Int("status", resp.StatusCode).Str("url", url).Msg("platform: recommended-tables returned non-200")
-		return nil
+		return "", fmt.Errorf("recommended source config lookup returned status %d", resp.StatusCode)
 	}
 	var body struct {
-		Tables []string `json:"tables"`
+		Config string `json:"config"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		logger.Debug().Err(err).Msg("platform: failed to decode recommended-tables")
-		return nil
+		return "", fmt.Errorf("decode recommended source config: %w", err)
 	}
-	return body.Tables
+	if body.Config == "" {
+		return "", fmt.Errorf("platform has no recommended source config for %s", sourcePath)
+	}
+	return body.Config, nil
 }
 
 // resolveCloudTenant resolves the single active tenant for the team (the
